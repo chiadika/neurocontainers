@@ -1,5 +1,5 @@
 name: quickgrid
-version: 1.1.0
+version: 1.1.1
 
 copyright:
   - license: MIT
@@ -26,19 +26,23 @@ files:
   - name: OpenReconREADME.md
     filename: OpenReconREADME.md
   - name: radial3d_trajectory
-    filename: radial3d_n6434_trajectory.h5
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/radial3d_n6434_trajectory.h5
   - name: radial3d_res128_nyquist
-    filename: radial3d_res128_nyquist_trajectory.h5
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/radial3d_res128_nyquist_trajectory.h5
   - name: radial3d_res128_us2x
-    filename: radial3d_res128_us2x_trajectory.h5
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/radial3d_res128_us2x_trajectory.h5
   - name: cones3d_n4846
-    filename: cones3d_n4846_trajectory.h5
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/cones3d_n4846_trajectory.h5
   - name: cones3d_n9598
-    filename: cones3d_n9598_trajectory.h5
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/cones3d_n9598_trajectory.h5
   - name: cones3d_n68785
-    filename: cones3d_n68785_trajectory.h5
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/cones3d_n68785_trajectory.h5
   - name: cones3d_n34506
-    filename: cones3d_n34506_trajectory.h5
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/cones3d_n34506_trajectory.h5
+  - name: cones3d_n206435
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/cones3d_n206435_trajectory.h5
+  - name: cones3d_n412489
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/cones3d_n412489_trajectory.h5
 
 build:
   kind: neurodocker
@@ -78,6 +82,8 @@ build:
         - cp {{ get_file("cones3d_n9598") }} /opt/quickgrid/cones3d_n9598_trajectory.h5
         - cp {{ get_file("cones3d_n68785") }} /opt/quickgrid/cones3d_n68785_trajectory.h5
         - cp {{ get_file("cones3d_n34506") }} /opt/quickgrid/cones3d_n34506_trajectory.h5
+        - cp {{ get_file("cones3d_n206435") }} /opt/quickgrid/cones3d_n206435_trajectory.h5
+        - cp {{ get_file("cones3d_n412489") }} /opt/quickgrid/cones3d_n412489_trajectory.h5
 
 deploy:
   bins:
@@ -98,9 +104,10 @@ readme: |-
   Bundled trajectories: three 3D radial sets (32^3 original, 128^3 Nyquist,
   128^3 2x undersampled) and four 3D cones sets (220 mm R=2 and R=1; 250 mm
   256^3 TE 50 us R=1 and R=2) that ship a precomputed Pipe-Menon DCF.
-  `trajectoryfile: auto` matches by shape, and also searches `fire\share`
-  (mounted as /tmp/share) for `*_trajectory.h5`, which is where the 512^3
-  trajectories go. Coils are gridded in parallel processes (`maxworkers`).
+  Since 1.1.1 the two 512^3 / 250 mm cones trajectories (R=4 and R=2, analytic
+  DCF) are bundled too. `trajectoryfile: auto` matches by shape, and also
+  searches `fire\share` (mounted as /tmp/share) for `*_trajectory.h5`. Coils
+  are gridded in parallel processes (`maxworkers`).
 
   Reconstruct offline without a scanner:
   ```bash

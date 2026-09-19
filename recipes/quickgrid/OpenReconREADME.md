@@ -21,14 +21,11 @@ Bundled trajectories (`trajectoryfile: auto` picks by acquired shape):
 | cones3d_n68785 | (312, 68785), with dcf | **266**, fovcm 25.0 |
 | cones3d_n34506 | (312, 34506), with dcf | **278**, fovcm 25.0 |
 
-Trajectories in `fire\share` (mounted as `/tmp/share`) are also candidates for
-`auto`, matched by `(samples, readouts)`, and the 512^3 ones are meant to live
-there rather than in the image:
+| cones3d_n206435 | (317, 206435), analytic dcf | **512**, fovcm 25.0 |
+| cones3d_n412489 | (317, 412489), analytic dcf | **512**, fovcm 25.0 |
 
-| file in fire\share | shape | matrixsize |
-|---|---|---|
-| cones3d_n206435_trajectory.h5 | (~360, 206435), with dcf | **512**, fovcm 25.0 |
-| cones3d_n412489_trajectory.h5 | (~360, 412489), with dcf | **512**, fovcm 25.0 |
+Trajectories in `fire\share` (mounted as `/tmp/share`) are also candidates for
+`auto`, matched by `(samples, readouts)`, so a new one only has to be copied there.
 
 Coils are gridded in parallel processes (`maxworkers`, default 8), capped by
 the CPUs and memory the container is given. The result does not depend on the

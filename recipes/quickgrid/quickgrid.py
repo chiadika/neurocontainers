@@ -51,16 +51,14 @@ BUNDLED_TRAJECTORIES = {
     "cones3d_n9598": f"/opt/{RECON_NAME}/cones3d_n9598_trajectory.h5",
     "cones3d_n68785": f"/opt/{RECON_NAME}/cones3d_n68785_trajectory.h5",   # 256^3 / 250 mm / TE 50, matrix 266
     "cones3d_n34506": f"/opt/{RECON_NAME}/cones3d_n34506_trajectory.h5",   # same, R=2, matrix 278
+    "cones3d_n206435": f"/opt/{RECON_NAME}/cones3d_n206435_trajectory.h5", # 512^3 / 250 mm / TR 2, R=4, matrix 512
+    "cones3d_n412489": f"/opt/{RECON_NAME}/cones3d_n412489_trajectory.h5", # 512^3 / 250 mm / TR 2, R=2, matrix 512
 }
 
-# Trajectories too large to bake into the image live in the scanner's
-# `fire\share` folder, which FIRE mounts as /tmp/share. `auto` also searches
-# that folder (mrdrecon.TRAJECTORY_SEARCH_DIRS), so dropping a new *_trajectory.h5
-# there is enough; these entries only give the UI a name for them.
-SHARE_TRAJECTORIES = {
-    "cones3d_n206435": f"{mrdrecon.SHARE_DIR}/cones3d_n206435_trajectory.h5",  # 512^3 / 250 mm / TR 2, R=4
-    "cones3d_n412489": f"{mrdrecon.SHARE_DIR}/cones3d_n412489_trajectory.h5",  # 512^3 / 250 mm / TR 2, R=2
-}
+# `auto` also searches the scanner's `fire\share` folder (mounted as /tmp/share,
+# mrdrecon.TRAJECTORY_SEARCH_DIRS) for *_trajectory.h5, so a trajectory that is
+# not baked in only has to be copied there. Entries here just name them in the UI.
+SHARE_TRAJECTORIES = {}
 
 # Keep these in step with OpenReconLabel.json (which is what the scanner JSON
 # config is generated from). Anything not listed there can still be set here.

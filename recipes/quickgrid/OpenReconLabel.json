@@ -44,8 +44,8 @@
        {"id": "/opt/quickgrid/cones3d_n9598_trajectory.h5", "name": {"en": "cones fully sampled (9598 readouts, matrix 134)"}},
        {"id": "/opt/quickgrid/cones3d_n68785_trajectory.h5", "name": {"en": "cones 256^3 250 mm TE50 R=1 (68785 readouts, matrix 266, FOV 25.0)"}},
        {"id": "/opt/quickgrid/cones3d_n34506_trajectory.h5", "name": {"en": "cones 256^3 250 mm TE50 R=2 (34506 readouts, matrix 278, FOV 25.0)"}},
-       {"id": "/tmp/share/cones3d_n206435_trajectory.h5", "name": {"en": "share: cones 512^3 250 mm TR2 R=4 (206435 readouts, matrix 512, FOV 25.0)"}},
-       {"id": "/tmp/share/cones3d_n412489_trajectory.h5", "name": {"en": "share: cones 512^3 250 mm TR2 R=2 (412489 readouts, matrix 512, FOV 25.0)"}}
+       {"id": "/opt/quickgrid/cones3d_n206435_trajectory.h5", "name": {"en": "cones 512^3 250 mm TR2 R=4 (206435 readouts, matrix 512, FOV 25.0)"}},
+       {"id": "/opt/quickgrid/cones3d_n412489_trajectory.h5", "name": {"en": "cones 512^3 250 mm TR2 R=2 (412489 readouts, matrix 512, FOV 25.0)"}}
      ], "default": "auto",
      "information": {"en": "Auto matches (samples, readouts) against the bundled trajectories and any *_trajectory.h5 in fire\\share, and refuses a mismatch. Cones trajectories carry a precomputed DCF; matrixsize must equal the label extent named here."}},
     {"id": "matrixsize", "label": {"en": "Matrix size"}, "type": "int", "minimum": 16, "maximum": 1024, "default": 128,

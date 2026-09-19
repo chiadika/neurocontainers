@@ -1,0 +1,452 @@
+# cgsense3d container test suite
+# Verifies OpenRecon runtime assets, the bundled trajectory's geometry, the
+# Toeplitz fast path against the direct operator, and an end-to-end recon.
+
+name: cgsense3d
+version: 1.1.6
+default_timeout: 900
+
+test_data:
+  output_dir: test_output
+
+setup:
+  script: |
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p ${output_dir}
+
+tests:
+  - name: OpenRecon server help
+    description: Verify the python-ismrmrd server entrypoint starts correctly
+    script: |
+      python /opt/code/python-ismrmrd-server/main.py -h 2>&1 | sed -n '1,20p' | grep 'Example server for MRD streaming format'
+
+  - name: Trajectory geometry and label assets
+    description: Verify the bundled trajectory matches the Pulseq sequence it was integrated from
+    script: |
+      python - <<'PY'
+      import json, numpy as np, h5py
+      from pathlib import Path
+
+      expected = {
+          "radial3d_n6434_trajectory.h5":         ((32, 6434, 3),   0.7159),
+          "radial3d_res128_nyquist_trajectory.h5":((128, 51071, 3), 2.8977),
+          "radial3d_res128_us2x_trajectory.h5":   ((128, 25536, 3), 2.8977),
+      }
+      for name, (shape, kmax_expected) in expected.items():
+          with h5py.File("/opt/cgsense3d/" + name, "r") as h:
+              kk = h["k"][:]
+          assert kk.shape == shape, (name, kk.shape)
+          km = float(np.linalg.norm(kk, axis=-1).max())
+          assert abs(km - kmax_expected) < 1e-3, (name, km)
+          dd = kk[-1] / np.linalg.norm(kk[-1], axis=-1, keepdims=True)
+          assert np.linalg.norm(dd.mean(0)) < 0.02, name
+          assert np.all(np.diff(np.linalg.norm(kk, axis=-1), axis=0) > 0), name
+          print("  %-42s %s  |k|max=%.4f /cm  res=%.2f mm" % (name, kk.shape, km, 10.0/(2*km)))
+
+      with h5py.File("/opt/cgsense3d/radial3d_n6434_trajectory.h5", "r") as h:
+          k = h["k"][:]
+      kmax = float(np.linalg.norm(k, axis=-1).max())
+      # centre-out: |k| increases monotonically along every spoke
+      radial = np.linalg.norm(k, axis=-1)
+      assert np.all(np.diff(radial, axis=0) > 0), "spokes are not monotonically centre-out"
+      # isotropic angular coverage
+      d = k[-1] / np.linalg.norm(k[-1], axis=-1, keepdims=True)
+      assert np.linalg.norm(d.mean(0)) < 0.02, np.linalg.norm(d.mean(0))
+      print("trajectory OK: |k|max=%.4f /cm, resolution %.2f mm" % (kmax, 10.0 / (2 * kmax)))
+
+      label = json.loads(Path("/opt/code/python-ismrmrd-server/OpenReconLabel.json").read_text())
+      assert len(label["parameters"]) <= 14, len(label["parameters"])
+      cfg = next(p for p in label["parameters"] if p["id"] == "config")
+      assert cfg["default"] == "cgsense3d", cfg["default"]
+      for p in label["parameters"]:
+          if p["type"] == "choice":
+              assert p["default"] in [v["id"] for v in p["values"]], p["id"]
+      print("label OK:", len(label["parameters"]), "parameters")
+      PY
+
+  - name: Modules import
+    description: Verify the app and framework import with their runtime dependencies
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import cgsense3d, mrdrecon, sigpy, sigpy.mri, twixtools  # noqa: F401
+      assert callable(cgsense3d.reconstruct) and callable(cgsense3d.process)
+      assert mrdrecon.RECON_NAME == "cgsense3d"
+      assert mrdrecon.OPENRECON_DEFAULTS["matrixsize"] == 128
+      print(cgsense3d.__file__)
+      PY
+
+  - name: Toeplitz operator matches the direct operator
+    description: The fast normal operator must agree with two NUFFTs per coil, or CG solves the wrong system
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, cgsense3d
+
+      N, coils, pts = 16, 3, 3000
+      rng = np.random.default_rng(0)
+      coord = rng.uniform(-N/2, N/2, (pts, 3)).astype(np.float32)
+      w = np.abs(rng.standard_normal(pts)).astype(np.float32)
+      maps = (rng.standard_normal((coils,)+(N,)*3) + 1j*rng.standard_normal((coils,)+(N,)*3)).astype(np.complex64)
+      x = (rng.standard_normal((N,)*3) + 1j*rng.standard_normal((N,)*3)).astype(np.complex64)
+
+      fast = cgsense3d.build_normal_operator(maps, coord, w, (N,)*3, 0.0, use_toeplitz=True)
+      slow = cgsense3d.build_normal_operator(maps, coord, w, (N,)*3, 0.0, use_toeplitz=False)
+      a, b = fast(x), slow(x)
+      err = np.linalg.norm(a - b) / np.linalg.norm(b)
+      print("Toeplitz vs direct relative error: %.3e" % err)
+      assert err < 5e-2, err
+
+      # The normal operator must be Hermitian positive definite for CG to work.
+      y = (rng.standard_normal((N,)*3) + 1j*rng.standard_normal((N,)*3)).astype(np.complex64)
+      herm = abs(np.vdot(fast(x), y) - np.vdot(x, fast(y))) / abs(np.vdot(fast(x), y))
+      print("Hermitian symmetry error: %.3e" % herm)
+      assert herm < 1e-3, herm
+      assert np.vdot(x, fast(x)).real > 0
+      PY
+
+  - name: End-to-end CG-SENSE on the bundled trajectory
+    description: Reconstruct a simulated phantom through the real trajectory and check it against ground truth
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, h5py, sigpy, mrdrecon, cgsense3d
+
+      with h5py.File("/opt/cgsense3d/radial3d_n6434_trajectory.h5", "r") as h:
+          traj = h["k"][:]
+      N, fov, coils = 32, 22.0, 4
+
+      g = np.stack(np.meshgrid(*[np.linspace(-1, 1, N)]*3, indexing="ij"))
+      r = np.linalg.norm(g, axis=0)
+      truth = ((r < 0.7).astype(np.float32) + 0.6*(np.abs(g[0]) < 0.2)*(r < 0.7)).astype(np.complex64)
+      mps = np.stack([np.exp(-((g[i % 3] - (0.6 if i < 2 else -0.6))**2).astype(np.float32))
+                      * np.exp(1j*0.5*g[(i+1) % 3]) for i in range(coils)]).astype(np.complex64)
+      mps /= np.sqrt((np.abs(mps)**2).sum(0))[None] + 1e-8
+
+      coord = (traj.reshape(-1, 3) * fov).astype(np.float32)
+      y = np.stack([sigpy.nufft(mps[c]*truth, coord) for c in range(coils)]).astype(np.complex64)
+      rng = np.random.default_rng(0)
+      y += (rng.standard_normal(y.shape) + 1j*rng.standard_normal(y.shape)).astype(np.complex64) * 0.01*np.abs(y).mean()
+
+      recon = mrdrecon.ReconInput(
+          kspace=y.reshape(coils, traj.shape[0], traj.shape[1]), trajectory=traj,
+          raw_kspace=y, matrix_size=N, fov_cm=fov,
+          config=dict(mrdrecon.OPENRECON_DEFAULTS, cgiterations=8, espiritmatrix=32),
+          metadata=None)
+
+      vol = cgsense3d.reconstruct(recon)
+      assert vol.shape == (N,)*3 and vol.dtype == np.float32 and np.all(np.isfinite(vol))
+      ref = np.abs(truth)
+      s = (vol*ref).sum() / max((vol*vol).sum(), 1e-30)
+      nrmse = np.linalg.norm(vol*s - ref) / np.linalg.norm(ref)
+      print("NRMSE against ground truth: %.4f" % nrmse)
+      assert nrmse < 0.35, nrmse
+      PY
+
+  - name: Trajectory auto-selection and mismatch rejection
+    description: The right trajectory must be chosen from the acquired data, and a wrong explicit choice must be refused
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, mrdrecon, cgsense3d
+
+      class FakeAcq:
+          def __init__(self, ns):
+              self.data = np.zeros((4, ns), dtype=np.complex64)
+              self.traj = None
+
+      def load(nsamp, nread, cfg):
+          return mrdrecon._load_trajectory([FakeAcq(nsamp) for _ in range(nread)], cfg)
+
+      # Each bundled sequence must be recovered from its acquired shape alone.
+      for nsamp, nread in ((32, 6434), (128, 51071), (128, 25536)):
+          t = load(nsamp, nread, {"parameters": {"trajectoryfile": "auto"}})
+          assert t.shape[:2] == (nsamp, nread), (nsamp, nread, t.shape)
+          print("  auto: samples=%-4d readouts=%-6d -> %s" % (nsamp, nread, t.shape))
+
+      # Phyllotaxis directions depend on the total spoke count, so using one
+      # sequence's trajectory for another is wrong, not merely degraded. It must
+      # raise rather than let _clip_data_to_trajectory crop silently.
+      wrong = "/opt/cgsense3d/radial3d_res128_nyquist_trajectory.h5"
+      try:
+          load(128, 25536, {"parameters": {"trajectoryfile": wrong}})
+          raise AssertionError("mismatched trajectory was accepted")
+      except ValueError as exc:
+          assert "must match exactly" in str(exc), str(exc)
+          print("  mismatch correctly rejected")
+
+      try:
+          load(64, 999, {"parameters": {"trajectoryfile": "auto"}})
+          raise AssertionError("unknown acquisition shape was accepted")
+      except ValueError as exc:
+          assert "No bundled trajectory matches" in str(exc), str(exc)
+          print("  unknown shape correctly rejected")
+
+      # ICE has been seen closing the raw channel a few readouts early (25408 of
+      # 25536 on the scanner). That is still this sequence, so it must resolve --
+      # both through auto-selection and through the shape gate behind it, which
+      # were relaxed together. scan_counter alignment places what did arrive.
+      t = load(128, 25408, {"parameters": {"trajectoryfile": "auto"}})
+      assert t.shape[:2] == (128, 25536), t.shape
+      print("  short acquisition 25408/25536 accepted -> %s" % (t.shape,))
+
+      # A shortfall beyond the tolerance is a different sequence again.
+      try:
+          load(128, 25000, {"parameters": {"trajectoryfile": "auto"}})
+          raise AssertionError("a 2.1% shortfall was accepted")
+      except ValueError as exc:
+          assert "No bundled trajectory matches" in str(exc), str(exc)
+          print("  oversized shortfall correctly rejected")
+      PY
+
+  - name: Density compensation modes
+    description: file/analytic/pipe/auto must each select the right weighting and fail loudly when they cannot
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, h5py, tempfile, os, mrdrecon, cgsense3d
+
+      N, fov = 32, 22.0
+      with h5py.File("/opt/cgsense3d/radial3d_n6434_trajectory.h5", "r") as h:
+          traj = h["k"][:]
+      shape = traj.shape[:2]
+
+      def make(cfg, source=None):
+          return mrdrecon.ReconInput(
+              kspace=np.ones((2,) + shape, dtype=np.complex64), trajectory=traj,
+              raw_kspace=None, matrix_size=N, fov_cm=fov,
+              config=dict(mrdrecon.OPENRECON_DEFAULTS, **cfg),
+              metadata=None, trajectory_source=source)
+
+      # analytic: |k|^2 on a uniform radial trajectory
+      w = cgsense3d.density_compensation(make({"dcfmode": "analytic"}))
+      assert w.shape == (shape[0]*shape[1],) and np.all(np.isfinite(w)) and w.max() > 0
+      print("analytic OK", w.shape, "range %.2e..%.2f" % (w.min(), w.max()))
+
+      # auto on a uniform radial trajectory with no file -> analytic, no Pipe-Menon
+      wa = cgsense3d.density_compensation(make({"dcfmode": "auto"}))
+      assert np.allclose(wa, w), "auto should have chosen analytic here"
+      print("auto -> analytic OK")
+
+      # file: precomputed dcf is read back verbatim
+      with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as tmp:
+          path = tmp.name
+      ref = np.linspace(0.01, 1.0, shape[0]*shape[1]).reshape(shape).astype(np.float32)
+      with h5py.File(path, "w") as h:
+          h.create_dataset("k", data=traj)
+          d = h.create_dataset("dcf", data=ref); d.attrs["method"] = "test"
+      wf = cgsense3d.density_compensation(make({"dcfmode": "file"}, source=path))
+      assert np.allclose(wf, ref.ravel()), "stored dcf was not returned verbatim"
+      print("file OK, matched stored values exactly")
+
+      # auto prefers the stored dcf over analytic
+      wauto = cgsense3d.density_compensation(make({"dcfmode": "auto"}, source=path))
+      assert np.allclose(wauto, ref.ravel()), "auto should prefer the stored dcf"
+      print("auto -> file OK")
+
+      # file with no dcf present must raise, not silently fall back
+      with h5py.File(path, "w") as h:
+          h.create_dataset("k", data=traj)
+      try:
+          cgsense3d.density_compensation(make({"dcfmode": "file"}, source=path))
+          raise AssertionError("dcfmode=file accepted a file with no dcf dataset")
+      except ValueError as e:
+          assert "no 'dcf' dataset" in str(e), str(e)
+          print("missing dcf correctly rejected")
+
+      # a wrong-length dcf must raise rather than corrupt the weighting
+      with h5py.File(path, "w") as h:
+          h.create_dataset("k", data=traj)
+          h.create_dataset("dcf", data=np.ones(7, dtype=np.float32))
+      try:
+          cgsense3d.density_compensation(make({"dcfmode": "auto"}, source=path))
+          raise AssertionError("a wrong-length dcf was accepted")
+      except ValueError as e:
+          assert "must correspond" in str(e), str(e)
+          print("wrong-length dcf correctly rejected")
+      os.unlink(path)
+
+      # bad mode name
+      try:
+          cgsense3d.density_compensation(make({"dcfmode": "nonsense"}))
+          raise AssertionError("an invalid dcfmode was accepted")
+      except ValueError:
+          print("invalid dcfmode correctly rejected")
+      PY
+
+  - name: Parallel normal operator is bit-identical to serial
+    description: The threaded coil loop must accumulate in fixed coil order, or results depend on thread scheduling
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, cgsense3d
+
+      N, coils, pts = 24, 10, 40000
+      rng = np.random.default_rng(0)
+      coord = rng.uniform(-N/2, N/2, (pts, 3)).astype(np.float32)
+      w = np.abs(rng.standard_normal(pts)).astype(np.float32)
+      maps = (rng.standard_normal((coils,)+(N,)*3) + 1j*rng.standard_normal((coils,)+(N,)*3)).astype(np.complex64)
+
+      serial_op = cgsense3d.build_normal_operator(maps, coord, w, (N,)*3, 1e-3, use_toeplitz=True, max_workers=1)
+      parallel_op = cgsense3d.build_normal_operator(maps, coord, w, (N,)*3, 1e-3, use_toeplitz=True, max_workers=8)
+
+      for i in range(3):
+          x = (rng.standard_normal((N,)*3) + 1j*rng.standard_normal((N,)*3)).astype(np.complex64)
+          a, b = serial_op(x), parallel_op(x)
+          assert np.array_equal(a, b), (i, float(np.abs(a-b).max()))
+          print("  vector %d: bitwise identical (max|diff|=%.1e)" % (i, float(np.abs(a-b).max())))
+      print("parallel normal operator is bit-identical to serial")
+      PY
+
+  - name: Emitted image carries a usable acquisition timestamp
+    description: The Pulseq interpreter leaves the raw timestamp at zero; passing that through makes ICE fail in FillMiniHead
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, mrdrecon, ismrmrd
+
+      # A real AcquisitionHeader defaults every field to zero, which is exactly
+      # the shape the Pulseq interpreter produces -- and unlike a stand-in object
+      # it carries every field update_img_header_from_raw copies.
+      raw = ismrmrd.AcquisitionHeader()
+      raw.version = 1
+      raw.measurement_uid = 1
+      raw.position = (0.0, 0.0, 0.0)
+      raw.read_dir = (-1.0, 0.0, 0.0)
+      raw.phase_dir = (0.0, 1.0, 0.0)
+      raw.slice_dir = (0.0, 0.0, 1.0)
+      raw.patient_table_position = (0.0, 0.0, 0.0)
+      assert int(raw.acquisition_time_stamp) == 0, "expected a zeroed raw timestamp"
+
+      meta = ismrmrd.xsd.ismrmrdHeader(
+          experimentalConditions=ismrmrd.xsd.experimentalConditionsType(H1resonanceFrequency_Hz=123200000))
+
+      vol = np.abs(np.random.default_rng(0).standard_normal((16, 16, 16))).astype(np.float32)
+      images = mrdrecon._build_output_images(vol, raw, meta, output_fov_mm=220.0)
+      head = images[0].getHead()
+      ts = int(head.acquisition_time_stamp)
+      print("raw timestamp 0 -> emitted", ts)
+      assert ts > 0, "zero timestamp would make ICE fail in m_pTimeOfFirstScan->setValue"
+      assert any(int(v) for v in head.physiology_time_stamp), "physiology timestamp still all zero"
+      print("emitted image carries a usable timestamp")
+      PY
+
+  - name: Readouts align to trajectory rows by scan counter
+    description: A gap in the raw stream must drop trajectory rows, not shift every later spoke onto the wrong one
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, mrdrecon, ismrmrd
+
+      def acquisitions(counters, coils=2, samples=4):
+          out = []
+          for c in counters:
+              a = ismrmrd.Acquisition.from_array(np.zeros((coils, samples), np.complex64))
+              h = a.getHead(); h.scan_counter = int(c); a.setHead(h)
+              out.append(a)
+          return out
+
+      N = 20
+      traj = np.zeros((4, N, 3), np.float32)
+      traj[:, :, 0] = np.arange(N)          # row index recoverable from the x component
+
+      # ICE closed the raw channel early: the tail is missing, order still holds.
+      assert mrdrecon._readout_row_indices(acquisitions(range(1, 17))) is None
+
+      # A gap in the middle is the dangerous case -- without scan_counter every
+      # spoke after it would silently take the wrong trajectory row.
+      kept = [c for c in range(1, N + 1) if not (6 <= c <= 9)]
+      rows = mrdrecon._readout_row_indices(acquisitions(kept))
+      _, clipped = mrdrecon._clip_data_to_trajectory(
+          np.zeros((2, len(kept), 4), np.complex64), traj, 0, rows)
+      used = clipped[0, :, 0].astype(int)
+      assert np.array_equal(used, np.array(kept) - 1), used
+      print("gap of 4 readouts -> trajectory rows", used)
+
+      # Pulseq may leave the counter at zero; that must fall back, not misalign.
+      assert mrdrecon._readout_row_indices(acquisitions([0] * 6)) is None
+
+      # A counter beyond the trajectory must be refused rather than indexed.
+      rows = mrdrecon._readout_row_indices(acquisitions([1, 2, 500]))
+      _, clipped = mrdrecon._clip_data_to_trajectory(
+          np.zeros((2, 3, 4), np.complex64), traj, 0, rows)
+      assert np.array_equal(clipped[0, :, 0].astype(int), [0, 1, 2])
+      print("out-of-range counter falls back to acquisition order")
+      PY
+
+  - name: Stream is drained before reconstructing
+    description: ICE can flag ACQ_LAST_IN_MEASUREMENT before the last readout; reconstructing there splits one measurement into two
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import types, numpy as np, ismrmrd, mrdrecon
+
+      def acq(counter, last=False):
+          a = ismrmrd.Acquisition.from_array(np.zeros((2, 4), np.complex64))
+          h = a.getHead(); h.scan_counter = counter; a.setHead(h)
+          if last:
+              a.setFlag(ismrmrd.ACQ_LAST_IN_MEASUREMENT)
+          return a
+
+      class Conn:
+          def __init__(self, items): self.items = items
+          def __iter__(self):
+              for i in self.items: yield i
+              yield None
+          def send_image(self, img): pass
+          def send_logging(self, *a): pass
+          def send_close(self): pass
+
+      groups = []
+      original = mrdrecon.process_raw
+      mrdrecon.process_raw = lambda acqs, *a, **k: groups.append(len(acqs)) or []
+      try:
+          # The scanner flagged readout 25408 of 25536; the tail then sat in the
+          # socket buffer for the length of the reconstruction and came back as a
+          # second, unreconstructable group.
+          items = [acq(i, last=(i == 20)) for i in range(1, 25)]
+          mrdrecon.run(Conn(items), {}, types.SimpleNamespace(encoding=[]), None)
+      finally:
+          mrdrecon.process_raw = original
+
+      assert groups == [24], "expected one group of 24, got %r" % (groups,)
+      print("flag at 20 of 24 -> single group of", groups[0])
+      PY
+
+  - name: Volume is emitted as one image per slice
+    description: IceProgramStandard crashes on a single 3D MRD image; each slice must carry its own position and index
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, ismrmrd, mrdrecon
+
+      raw = ismrmrd.AcquisitionHeader()
+      raw.version = 1; raw.measurement_uid = 1
+      raw.position = (0.0, 0.0, 0.0)
+      raw.read_dir = (-1.0, 0.0, 0.0)
+      raw.phase_dir = (0.0, 1.0, 0.0)
+      raw.slice_dir = (0.0, 0.0, 1.0)
+      raw.patient_table_position = (0.0, 0.0, 0.0)
+      meta = ismrmrd.xsd.ismrmrdHeader(
+          experimentalConditions=ismrmrd.xsd.experimentalConditionsType(
+              H1resonanceFrequency_Hz=123200000))
+
+      N, fov = 16, 220.0
+      vol = np.abs(np.random.default_rng(0).standard_normal((N, N, N))).astype(np.float32)
+      images = mrdrecon._build_output_images(vol, raw, meta, output_fov_mm=fov)
+
+      assert len(images) == N, "expected %d images, got %d" % (N, len(images))
+      first, last = images[0].getHead(), images[-1].getHead()
+      assert tuple(int(v) for v in first.matrix_size) == (N, N, 1), first.matrix_size
+      assert (first.image_index, last.image_index) == (1, N)
+
+      # Each frame must sit at its own place, fov/N apart, or the volume
+      # collapses onto one slice position in the DICOM writer.
+      step = np.linalg.norm(np.array(last.position) - np.array(first.position)) / (N - 1)
+      assert abs(step - fov / N) < 1e-3, step
+
+      # One series, distinct instances, or the frames will not group.
+      attrs = [ismrmrd.Meta.deserialize(i.attribute_string) for i in images]
+      assert len({a["SeriesInstanceUID"] for a in attrs}) == 1
+      assert len({a["SOPInstanceUID"] for a in attrs}) == N
+      print("%d slices, %.4f mm apart, 1 series, %d instances" % (N, step, N))
+      PY
+
+  - name: Helper scripts render help
+    description: Verify the conversion helpers and the offline driver expose command line help
+    script: |
+      python /opt/code/python-ismrmrd-server/twix2mrd.py -h 2>&1 | grep 'usage:'
+      python /opt/code/python-ismrmrd-server/siemens_twix2mrd.py -h 2>&1 | grep 'usage:'
+      python /opt/code/python-ismrmrd-server/mrd2nifti.py -h 2>&1 | grep 'usage:'
+      python /opt/code/python-ismrmrd-server/run_local.py -h 2>&1 | grep 'usage:'

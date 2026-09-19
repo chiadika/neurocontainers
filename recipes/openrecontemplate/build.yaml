@@ -1,0 +1,111 @@
+name: openrecontemplate
+version: 1.0.0
+
+copyright:
+  - license: MIT
+    url: https://github.com/NeuroDesk/neurocontainers/blob/main/LICENSE
+
+architectures:
+  - x86_64
+
+files:
+  - name: openrecontemplate.py
+    filename: openrecontemplate.py
+  - name: mrdrecon.py
+    filename: mrdrecon.py
+  - name: example_cgsense.py
+    filename: example_cgsense.py
+  - name: run_local.py
+    filename: run_local.py
+  - name: twix2mrd.py
+    filename: twix2mrd.py
+  - name: siemens_twix2mrd.py
+    filename: siemens_twix2mrd.py
+  - name: mrd2nifti.py
+    filename: mrd2nifti.py
+  - name: OpenReconLabel.json
+    filename: OpenReconLabel.json
+  - name: OpenReconREADME.md
+    filename: OpenReconREADME.md
+  - name: sodium_trajectory_n50
+    url: https://object-store.rc.nectar.org.au/v1/AUTH_dead991e1fa847e3afcca2d3a7041f5d/build/23Na_n50_trajectory.h5
+  - name: sodium_trajectory_n28
+    url: https://object-store.rc.nectar.org.au/v1/AUTH_dead991e1fa847e3afcca2d3a7041f5d/build/23Na_n28_trajectory.h5
+
+build:
+  kind: neurodocker
+  base-image: ubuntu:22.04
+  pkg-manager: apt
+
+  directives:
+    - environment:
+        DEBIAN_FRONTEND: noninteractive
+        NUMBA_CACHE_DIR: /tmp/numba-openrecontemplate
+    - install:
+        - bzip2
+        - ca-certificates
+        - git
+        - build-essential
+        - python3-pip
+        - python-is-python3
+    - include: macros/openrecon/neurodocker.yaml
+    - run:
+        - ldconfig
+    # sigpy covers NUFFT/CG-SENSE; numba and pyFFTW are here so a hand-written
+    # gridding kernel can be dropped in; SimpleITK provides N4.
+    - run:
+        - pip3 install --no-cache-dir sigpy==0.1.27 numba==0.66.0 pyFFTW==0.15.0 SimpleITK==2.5.5 twixtools==0.24
+    - workdir: /opt/openrecontemplate
+    - run:
+        - cp {{ get_file("openrecontemplate.py") }} /opt/code/python-ismrmrd-server/openrecontemplate.py
+        - cp {{ get_file("mrdrecon.py") }} /opt/code/python-ismrmrd-server/mrdrecon.py
+        - cp {{ get_file("example_cgsense.py") }} /opt/code/python-ismrmrd-server/example_cgsense.py
+        - cp {{ get_file("run_local.py") }} /opt/code/python-ismrmrd-server/run_local.py
+        - cp {{ get_file("twix2mrd.py") }} /opt/code/python-ismrmrd-server/twix2mrd.py
+        - cp {{ get_file("siemens_twix2mrd.py") }} /opt/code/python-ismrmrd-server/siemens_twix2mrd.py
+        - cp {{ get_file("mrd2nifti.py") }} /opt/code/python-ismrmrd-server/mrd2nifti.py
+        - cp {{ get_file("OpenReconLabel.json") }} /opt/code/python-ismrmrd-server/OpenReconLabel.json
+        - cp {{ get_file("OpenReconREADME.md") }} /opt/openrecontemplate/OpenReconREADME.md
+    - run:
+        - cp {{ get_file("sodium_trajectory_n50") }} /opt/openrecontemplate/23Na_n50_trajectory.h5
+        - cp {{ get_file("sodium_trajectory_n28") }} /opt/openrecontemplate/23Na_n28_trajectory.h5
+
+deploy:
+  bins:
+    - python
+    - siemens_to_ismrmrd
+
+categories:
+  - image reconstruction
+icon: "data:image/png;base64,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"
+
+readme: |-
+  ----------------------------------
+  ## openrecontemplate/{{ context.version }} ##
+  A starting point for writing your own OpenRecon reconstruction. All the
+  ISMRMRD plumbing lives in `mrdrecon.py`; you write one function,
+  `reconstruct()`, in `openrecontemplate.py`.
+
+  The shipped algorithm is a density-compensated adjoint NUFFT, so the container
+  reconstructs out of the box. `example_cgsense.py` shows the same pipeline
+  solving an iterative CG-SENSE problem instead.
+
+  Iterate offline without a scanner:
+  ```bash
+  python /opt/code/python-ismrmrd-server/run_local.py raw.h5 -o recon.nii.gz
+  ```
+
+  Build the recipe with:
+  ```bash
+  source env/bin/activate
+  python -m builder generate openrecontemplate --recreate --architecture x86_64
+  ```
+
+  Full build:
+  ```bash
+  source env/bin/activate
+  sf-build openrecontemplate --architecture x86_64
+  ```
+
+  Runtime notes are documented in `recipes/openrecontemplate/OpenReconREADME.md`.
+  ----------------------------------

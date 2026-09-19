@@ -1,0 +1,118 @@
+name: pnpdrunetgpu
+version: 1.1.0
+
+copyright:
+  - license: MIT
+    url: https://github.com/NeuroDesk/neurocontainers/blob/main/LICENSE
+  - license: MIT
+    url: https://github.com/cszn/DPIR/blob/master/LICENSE
+
+architectures:
+  - x86_64
+
+files:
+  - name: pnpdrunetgpu.py
+    filename: pnpdrunetgpu.py
+  - name: reconops.py
+    filename: reconops.py
+  - name: drunet.py
+    filename: drunet.py
+  - name: mrdrecon.py
+    filename: mrdrecon.py
+  - name: run_local.py
+    filename: run_local.py
+  - name: twix2mrd.py
+    filename: twix2mrd.py
+  - name: siemens_twix2mrd.py
+    filename: siemens_twix2mrd.py
+  - name: mrd2nifti.py
+    filename: mrd2nifti.py
+  - name: OpenReconLabel.json
+    filename: OpenReconLabel.json
+  - name: OpenReconREADME.md
+    filename: OpenReconREADME.md
+  - name: radial3d_res128_nyquist
+    filename: radial3d_res128_nyquist_trajectory.h5
+  - name: radial3d_res128_us2x
+    filename: radial3d_res128_us2x_trajectory.h5
+  - name: radial3d_n6434
+    filename: radial3d_n6434_trajectory.h5
+  - name: drunet_gray_checkpoint
+    url: https://github.com/cszn/KAIR/releases/download/v1.0/drunet_gray.pth
+
+build:
+  kind: neurodocker
+  base-image: ubuntu:22.04
+  pkg-manager: apt
+
+  directives:
+    - environment:
+        DEBIAN_FRONTEND: noninteractive
+        OMP_NUM_THREADS: "8"
+    - install:
+        - bzip2
+        - ca-certificates
+        - git
+        - build-essential
+        - python3-pip
+        - python-is-python3
+    - include: macros/openrecon/neurodocker.yaml
+    - run:
+        - ldconfig
+    - run:
+        - pip3 install --no-cache-dir sigpy==0.1.27 twixtools==0.24
+    # CUDA 11.8 build: OpenRecon caps CUDA at 11.8, and cu118 wheels bundle
+    # their own runtime, so only a >= 11.8-capable driver is needed on the host.
+    # The app verifies the device with a real kernel at startup and falls back
+    # to CPU if anything is wrong, so this image still runs on a GPU-less host.
+    - run:
+        - pip3 install --no-cache-dir --index-url https://download.pytorch.org/whl/cu118 torch==2.5.1
+    - workdir: /opt/pnpdrunetgpu
+    - run:
+        - cp {{ get_file("pnpdrunetgpu.py") }} /opt/code/python-ismrmrd-server/pnpdrunetgpu.py
+        - cp {{ get_file("reconops.py") }} /opt/code/python-ismrmrd-server/reconops.py
+        - cp {{ get_file("drunet.py") }} /opt/code/python-ismrmrd-server/drunet.py
+        - cp {{ get_file("mrdrecon.py") }} /opt/code/python-ismrmrd-server/mrdrecon.py
+        - cp {{ get_file("run_local.py") }} /opt/code/python-ismrmrd-server/run_local.py
+        - cp {{ get_file("twix2mrd.py") }} /opt/code/python-ismrmrd-server/twix2mrd.py
+        - cp {{ get_file("siemens_twix2mrd.py") }} /opt/code/python-ismrmrd-server/siemens_twix2mrd.py
+        - cp {{ get_file("mrd2nifti.py") }} /opt/code/python-ismrmrd-server/mrd2nifti.py
+        - cp {{ get_file("OpenReconLabel.json") }} /opt/code/python-ismrmrd-server/OpenReconLabel.json
+        - cp {{ get_file("OpenReconREADME.md") }} /opt/pnpdrunetgpu/OpenReconREADME.md
+    - run:
+        - cp {{ get_file("radial3d_res128_nyquist") }} /opt/pnpdrunetgpu/radial3d_res128_nyquist_trajectory.h5
+        - cp {{ get_file("radial3d_res128_us2x") }} /opt/pnpdrunetgpu/radial3d_res128_us2x_trajectory.h5
+        - cp {{ get_file("radial3d_n6434") }} /opt/pnpdrunetgpu/radial3d_n6434_trajectory.h5
+        - cp {{ get_file("drunet_gray_checkpoint") }} /opt/pnpdrunetgpu/drunet_gray.pth
+
+deploy:
+  bins:
+    - python
+    - siemens_to_ismrmrd
+
+categories:
+  - image reconstruction
+  - machine learning
+icon: "data:image/png;base64,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"
+
+readme: |-
+  ----------------------------------
+  ## pnpdrunetgpu/{{ context.version }} ##
+  Plug-and-play 3D radial reconstruction with a DRUNet denoiser prior, using
+  half-quadratic splitting. The data sub-problem reuses the Toeplitz-accelerated
+  CG-SENSE operator from `cgsense3d`; the prior sub-problem is one DRUNet pass.
+
+  Learned regularisation that fits a scanner time budget: this needs ~6 network
+  evaluations, where diffusion posterior sampling needs ~1000.
+
+  Research use only. DRUNet was trained on natural grayscale images, not MR
+  data, so the prior shapes the image in ways the acquisition does not
+  constrain. Compare against `cgsense3d` before trusting any structure.
+
+  Reconstruct offline without a scanner:
+  ```bash
+  python /opt/code/python-ismrmrd-server/run_local.py raw.h5 -o recon.nii.gz -m pnpdrunetgpu
+  ```
+
+  Runtime notes are documented in `recipes/pnpdrunet/OpenReconREADME.md`.
+  ----------------------------------

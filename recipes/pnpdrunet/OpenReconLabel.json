@@ -1,0 +1,350 @@
+{
+  "general": {
+    "name": {
+      "en": "pnpdrunet"
+    },
+    "version": "VERSION_WILL_BE_REPLACED_BY_SCRIPT",
+    "vendor": "neurodesk",
+    "information": {
+      "en": "Plug-and-play 3D radial reconstruction with a DRUNet denoiser prior."
+    },
+    "id": "pnpdrunet",
+    "regulatory_information": {
+      "device_trade_name": "pnpdrunet",
+      "production_identifier": "VERSION_WILL_BE_REPLACED_BY_SCRIPT",
+      "manufacturer_address": "Erlangen, Germany",
+      "made_in": "DE",
+      "manufacture_date": "2023/02/14",
+      "material_number": "pnpdrunet_VERSION_WILL_BE_REPLACED_BY_SCRIPT",
+      "gtin": "00860000171212",
+      "udi": "(01)00860000171212(21)1.3.0",
+      "safety_advices": "",
+      "special_operating_instructions": "OpenRecon plug-and-play reconstruction from raw k-space to magnitude image data. Research use only: the image is shaped by a learned prior trained on natural images, not on MR data.",
+      "additional_relevant_information": ""
+    }
+  },
+  "reconstruction": {
+    "transfer_protocol": {
+      "protocol": "ISMRMRD",
+      "version": "1.4.1"
+    },
+    "port": 9002,
+    "emitter": "raw",
+    "injector": "compleximage",
+    "can_process_adjustment_data": true,
+    "can_use_gpu": false,
+    "min_required_memory": 32000,
+    "min_count_required_cpu_cores": 10,
+    "content_qualification_type": "RESEARCH"
+  },
+  "parameters": [
+    {
+      "id": "config",
+      "label": {
+        "en": "config"
+      },
+      "type": "choice",
+      "values": [
+        {
+          "id": "pnpdrunet",
+          "name": {
+            "en": "pnpdrunet"
+          }
+        }
+      ],
+      "default": "pnpdrunet",
+      "information": {
+        "en": "Module the MRD server loads. Must match the app module filename."
+      }
+    },
+    {
+      "id": "trajectoryfile",
+      "label": {
+        "en": "Bundled trajectory"
+      },
+      "type": "choice",
+      "values": [
+        {
+          "id": "auto",
+          "name": {
+            "en": "Auto (match the acquired data)"
+          }
+        },
+        {
+          "id": "/opt/pnpdrunet/radial3d_res128_us2x_trajectory.h5",
+          "name": {
+            "en": "128^3, 2x undersampled (25536 spokes, 2.6 min)"
+          }
+        },
+        {
+          "id": "/opt/pnpdrunet/radial3d_res128_nyquist_trajectory.h5",
+          "name": {
+            "en": "128^3, Nyquist (51071 spokes, 5.2 min)"
+          }
+        },
+        {
+          "id": "/opt/pnpdrunet/radial3d_n6434_trajectory.h5",
+          "name": {
+            "en": "32^3, original sequence (6434 spokes, 39 s)"
+          }
+        }
+      ],
+      "default": "auto",
+      "information": {
+        "en": "Auto matches the acquired (samples, readouts) against the bundled trajectories, which have distinct shapes. Choosing the wrong one by hand does not degrade the image, it produces a wrong one: phyllotaxis directions depend on the total spoke count, so 92% of spokes differ by more than 10 degrees between the bundled 128^3 sets. An explicit choice that disagrees with the data is now rejected."
+      }
+    },
+    {
+      "id": "matrixsize",
+      "label": {
+        "en": "Matrix size"
+      },
+      "type": "int",
+      "minimum": 16,
+      "maximum": 256,
+      "default": 128,
+      "information": {
+        "en": "Isotropic output matrix."
+      }
+    },
+    {
+      "id": "fovcm",
+      "label": {
+        "en": "FOV cm"
+      },
+      "type": "string",
+      "default": "22.0",
+      "information": {
+        "en": "Reconstruction field of view in cm. Must match the sequence FOV."
+      }
+    },
+    {
+      "id": "dcfmode",
+      "label": {
+        "en": "Density compensation"
+      },
+      "type": "choice",
+      "values": [
+        {
+          "id": "auto",
+          "name": {
+            "en": "Auto (file, else analytic, else Pipe-Menon)"
+          }
+        },
+        {
+          "id": "file",
+          "name": {
+            "en": "From trajectory file"
+          }
+        },
+        {
+          "id": "analytic",
+          "name": {
+            "en": "Analytic |k|^2 (uniform radial only)"
+          }
+        },
+        {
+          "id": "pipe",
+          "name": {
+            "en": "Pipe-Menon (slow, any trajectory)"
+          }
+        }
+      ],
+      "default": "auto",
+      "information": {
+        "en": "Auto uses a precomputed 'dcf' dataset in the trajectory file if present, falls back to analytic |k|^2 for uniformly-sampled radial, and to Pipe-Menon otherwise. Pipe-Menon at reconstruction time costs minutes: for cones, spirals or variable-density trajectories, precompute with make_dcf.py instead."
+      }
+    },
+    {
+      "id": "pnpiterations",
+      "label": {
+        "en": "PnP iterations"
+      },
+      "type": "int",
+      "minimum": 1,
+      "maximum": 30,
+      "default": 6,
+      "information": {
+        "en": "Half-quadratic splitting outer iterations. Each is one CG solve plus one DRUNet pass."
+      }
+    },
+    {
+      "id": "pnpsigmamax",
+      "label": {
+        "en": "Sigma start"
+      },
+      "type": "string",
+      "default": "0.10",
+      "information": {
+        "en": "Denoiser noise level at the first iteration, on a 0-1 intensity scale."
+      }
+    },
+    {
+      "id": "pnpsigmamin",
+      "label": {
+        "en": "Sigma end"
+      },
+      "type": "string",
+      "default": "0.02",
+      "information": {
+        "en": "Denoiser noise level at the last iteration. Geometric schedule between the two."
+      }
+    },
+    {
+      "id": "pnplambda",
+      "label": {
+        "en": "Data weight"
+      },
+      "type": "string",
+      "default": "0.23",
+      "information": {
+        "en": "DPIR coupling: the data term weight is lambda/sigma^2 at each iteration."
+      }
+    },
+    {
+      "id": "denoiseaxes",
+      "label": {
+        "en": "Denoise orientations"
+      },
+      "type": "choice",
+      "values": [
+        {
+          "id": "1",
+          "name": {
+            "en": "Axial only (fast)"
+          }
+        },
+        {
+          "id": "3",
+          "name": {
+            "en": "All three (isotropic)"
+          }
+        }
+      ],
+      "default": "1",
+      "information": {
+        "en": "DRUNet is 2D. Denoising along all three orthogonal orientations and averaging removes through-plane anisotropy at 3x the prior cost."
+      }
+    },
+    {
+      "id": "usegpu",
+      "label": {
+        "en": "Device"
+      },
+      "type": "choice",
+      "values": [
+        {
+          "id": "auto",
+          "name": {
+            "en": "Auto (CUDA if usable, else CPU)"
+          }
+        },
+        {
+          "id": "cuda",
+          "name": {
+            "en": "Force CUDA"
+          }
+        },
+        {
+          "id": "cpu",
+          "name": {
+            "en": "Force CPU"
+          }
+        }
+      ],
+      "default": "auto",
+      "information": {
+        "en": "CUDA is verified with a real kernel at startup; anything that fails falls back to CPU. 'Force CUDA' only changes the log level of that fallback, it never aborts the reconstruction."
+      }
+    },
+    {
+      "id": "espiritcrop",
+      "label": {
+        "en": "ESPIRiT crop"
+      },
+      "type": "string",
+      "default": "0.8",
+      "information": {
+        "en": "Eigenvalue cutoff defining the sensitivity support mask."
+      }
+    },
+    {
+      "id": "orientation",
+      "label": {
+        "en": "Orientation"
+      },
+      "type": "choice",
+      "values": [
+        {
+          "id": "zyx",
+          "name": {
+            "en": "zyx"
+          }
+        },
+        {
+          "id": "zyx_fx",
+          "name": {
+            "en": "zyx_fx"
+          }
+        },
+        {
+          "id": "zyx_fy",
+          "name": {
+            "en": "zyx_fy"
+          }
+        },
+        {
+          "id": "zyx_fxy",
+          "name": {
+            "en": "zyx_fxy"
+          }
+        },
+        {
+          "id": "zxy",
+          "name": {
+            "en": "zxy"
+          }
+        },
+        {
+          "id": "zxy_fx",
+          "name": {
+            "en": "zxy_fx"
+          }
+        },
+        {
+          "id": "zxy_fy",
+          "name": {
+            "en": "zxy_fy"
+          }
+        },
+        {
+          "id": "zxy_fxy",
+          "name": {
+            "en": "zxy_fxy"
+          }
+        },
+        {
+          "id": "debug",
+          "name": {
+            "en": "debug"
+          }
+        }
+      ],
+      "default": "zyx",
+      "information": {
+        "en": "Mapping from trajectory components to acquisition axes."
+      }
+    },
+    {
+      "id": "orientationflipslice",
+      "label": {
+        "en": "Flip slice order"
+      },
+      "type": "boolean",
+      "default": false,
+      "information": {
+        "en": "Reverse the through-plane order before display-frame canonicalisation."
+      }
+    }
+  ]
+}

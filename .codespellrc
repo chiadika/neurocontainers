@@ -26,5 +26,6 @@ ignore-regex = (Linke AC|Claus Zimmer|Zimmer, Claus|[A-Za-z0-9+/]{40,}={0,2})
 #   doubleclick - an Openbox rc.xml key
 #   fo       - a variable name in nipype example code
 #   caf      - the `tar caf` flag cluster
+#   lamda    - sigpy's spelling of its regularisation keyword argument
 #   mattern, sherif, hart - author surnames in citations
-ignore-words-list = nd,te,delte,fwe,toi,ttest,varian,gaus,desolve,ist,readin,ans,commun,mapp,reson,mede,nwo,espace,requestor,doubleclick,mattern,sherif,hart,fo,caf
+ignore-words-list = nd,te,delte,fwe,toi,ttest,varian,gaus,desolve,ist,readin,ans,commun,mapp,reson,mede,nwo,espace,requestor,doubleclick,mattern,sherif,hart,fo,caf,lamda

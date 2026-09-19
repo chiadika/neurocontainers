@@ -1,0 +1,80 @@
+{
+  "general": {
+    "name": {"en": "quickgrid"},
+    "version": "VERSION_WILL_BE_REPLACED_BY_SCRIPT",
+    "vendor": "neurodesk",
+    "information": {"en": "Fast gridding (adjoint NUFFT + density compensation + coil combination) for 3D radial and cones. For scanner-side testing."},
+    "id": "quickgrid",
+    "regulatory_information": {
+      "device_trade_name": "quickgrid",
+      "production_identifier": "VERSION_WILL_BE_REPLACED_BY_SCRIPT",
+      "manufacturer_address": "Erlangen, Germany",
+      "made_in": "DE",
+      "manufacture_date": "2023/02/14",
+      "material_number": "quickgrid_VERSION_WILL_BE_REPLACED_BY_SCRIPT",
+      "gtin": "00860000171212",
+      "udi": "(01)00860000171212(21)1.3.0",
+      "safety_advices": "",
+      "special_operating_instructions": "OpenRecon gridding reconstruction from raw k-space to magnitude image data",
+      "additional_relevant_information": ""
+    }
+  },
+  "reconstruction": {
+    "transfer_protocol": {"protocol": "ISMRMRD", "version": "1.4.1"},
+    "port": 9002,
+    "emitter": "raw",
+    "injector": "compleximage",
+    "can_process_adjustment_data": true,
+    "can_use_gpu": false,
+    "min_required_memory": 16000,
+    "min_count_required_cpu_cores": 4,
+    "content_qualification_type": "RESEARCH"
+  },
+  "parameters": [
+    {"id": "config", "label": {"en": "config"}, "type": "choice",
+     "values": [{"id": "quickgrid", "name": {"en": "quickgrid"}}], "default": "quickgrid",
+     "information": {"en": "Module the MRD server loads. Must match the app module filename."}},
+    {"id": "trajectoryfile", "label": {"en": "Bundled trajectory"}, "type": "choice",
+     "values": [
+       {"id": "auto", "name": {"en": "Auto (match the acquired data)"}},
+       {"id": "/opt/quickgrid/radial3d_res128_us2x_trajectory.h5", "name": {"en": "radial 128^3, 2x undersampled (25536 spokes)"}},
+       {"id": "/opt/quickgrid/radial3d_res128_nyquist_trajectory.h5", "name": {"en": "radial 128^3, Nyquist (51071 spokes)"}},
+       {"id": "/opt/quickgrid/radial3d_n6434_trajectory.h5", "name": {"en": "radial 32^3, original (6434 spokes)"}},
+       {"id": "/opt/quickgrid/cones3d_n4846_trajectory.h5", "name": {"en": "cones R=2 (4846 readouts, matrix 134)"}},
+       {"id": "/opt/quickgrid/cones3d_n9598_trajectory.h5", "name": {"en": "cones fully sampled (9598 readouts, matrix 134)"}},
+       {"id": "/opt/quickgrid/cones3d_n68785_trajectory.h5", "name": {"en": "cones 256^3 250 mm TE50 R=1 (68785 readouts, matrix 266, FOV 25.0)"}},
+       {"id": "/opt/quickgrid/cones3d_n34506_trajectory.h5", "name": {"en": "cones 256^3 250 mm TE50 R=2 (34506 readouts, matrix 278, FOV 25.0)"}},
+       {"id": "/tmp/share/cones3d_n206435_trajectory.h5", "name": {"en": "share: cones 512^3 250 mm TR2 R=4 (206435 readouts, matrix 512, FOV 25.0)"}},
+       {"id": "/tmp/share/cones3d_n412489_trajectory.h5", "name": {"en": "share: cones 512^3 250 mm TR2 R=2 (412489 readouts, matrix 512, FOV 25.0)"}}
+     ], "default": "auto",
+     "information": {"en": "Auto matches (samples, readouts) against the bundled trajectories and any *_trajectory.h5 in fire\\share, and refuses a mismatch. Cones trajectories carry a precomputed DCF; matrixsize must equal the label extent named here."}},
+    {"id": "matrixsize", "label": {"en": "Matrix size"}, "type": "int", "minimum": 16, "maximum": 1024, "default": 128,
+     "information": {"en": "Isotropic output matrix. 128 for the radial sequences, 134 for the 220 mm cones, 266/278 for the 256^3 cones, 512 for the 512^3 cones. Must equal the sequence's LIN/PAR label extent."}},
+    {"id": "fovcm", "label": {"en": "FOV cm"}, "type": "string", "default": "22.0",
+     "information": {"en": "Reconstruction field of view in cm. Must match the sequence FOV: 22.0 for the 128^3 sequences, 25.0 for the fov250 cones."}},
+    {"id": "dcfmode", "label": {"en": "Density compensation"}, "type": "choice",
+     "values": [
+       {"id": "auto", "name": {"en": "Auto (file, else analytic, else Pipe-Menon)"}},
+       {"id": "file", "name": {"en": "From trajectory file"}},
+       {"id": "analytic", "name": {"en": "Analytic |k|^2 (uniform radial only)"}},
+       {"id": "pipe", "name": {"en": "Pipe-Menon (slow, any trajectory)"}}
+     ], "default": "auto",
+     "information": {"en": "Radial: analytic |k|^2 is exact. Cones: the shipped dcf dataset. Pipe-Menon at recon time takes minutes."}},
+    {"id": "coilcombinemode", "label": {"en": "Coil combination"}, "type": "choice",
+     "values": [{"id": "SoS", "name": {"en": "Sum of squares"}}, {"id": "AC", "name": {"en": "Adaptive combine"}}],
+     "default": "SoS", "information": {"en": "Sum of squares is the safe default; adaptive combine estimates sensitivities from the coil images."}},
+    {"id": "applyfermifilter", "label": {"en": "Fermi filter"}, "type": "boolean", "default": false,
+     "information": {"en": "Apodise k-space before gridding to reduce ringing."}},
+    {"id": "maxcoils", "label": {"en": "Max coils"}, "type": "int", "minimum": 0, "maximum": 64, "default": 16,
+     "information": {"en": "Reconstruct at most this many channels. 0 uses all of them."}},
+    {"id": "maxworkers", "label": {"en": "Gridding processes"}, "type": "int", "minimum": 1, "maximum": 32, "default": 8,
+     "information": {"en": "Coils are gridded in parallel processes. Capped automatically by the CPUs and memory the container is given; the result does not depend on it."}},
+    {"id": "orientation", "label": {"en": "Orientation"}, "type": "choice",
+     "values": [{"id": "zyx", "name": {"en": "zyx"}}, {"id": "zyx_fx", "name": {"en": "zyx_fx"}}, {"id": "zyx_fy", "name": {"en": "zyx_fy"}}, {"id": "zyx_fxy", "name": {"en": "zyx_fxy"}},
+                {"id": "zxy", "name": {"en": "zxy"}}, {"id": "zxy_fx", "name": {"en": "zxy_fx"}}, {"id": "zxy_fy", "name": {"en": "zxy_fy"}}, {"id": "zxy_fxy", "name": {"en": "zxy_fxy"}},
+                {"id": "debug", "name": {"en": "debug"}}],
+     "default": "zyx", "information": {"en": "Mapping from trajectory components to acquisition axes. 'debug' emits every mapping as a separate series."}},
+    {"id": "orientationflipslice", "label": {"en": "Flip slice order"}, "type": "boolean", "default": false,
+     "information": {"en": "Reverse the through-plane order before the display-frame canonicalisation."}}
+  ]
+}

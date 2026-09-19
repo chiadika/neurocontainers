@@ -1,0 +1,136 @@
+# openrecontemplate container test suite
+# Verifies the OpenRecon runtime assets and the reconstruct() contract.
+
+name: openrecontemplate
+version: 1.0.0
+default_timeout: 600
+
+test_data:
+  output_dir: test_output
+
+setup:
+  script: |
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p ${output_dir}
+
+tests:
+  - name: OpenRecon server help
+    description: Verify the python-ismrmrd server entrypoint starts correctly
+    script: |
+      python /opt/code/python-ismrmrd-server/main.py -h 2>&1 | sed -n '1,20p' | grep 'Example server for MRD streaming format'
+
+  - name: Bundled trajectory and label assets
+    description: Verify the packaged trajectories and OpenRecon label are present and readable
+    script: |
+      python - <<'PY'
+      import json
+      from pathlib import Path
+      import h5py
+
+      for trajectory in (Path("/opt/openrecontemplate/23Na_n50_trajectory.h5"),
+                         Path("/opt/openrecontemplate/23Na_n28_trajectory.h5")):
+          with h5py.File(trajectory, "r") as handle:
+              assert "k" in handle, list(handle.keys())
+              print("trajectory", trajectory.name, handle["k"].shape)
+
+      label = json.loads(Path("/opt/code/python-ismrmrd-server/OpenReconLabel.json").read_text())
+      ids = {p["id"] for p in label["parameters"]}
+      # The config value selects the module the MRD server imports, so the
+      # label and the app module filename must agree.
+      config = next(p for p in label["parameters"] if p["id"] == "config")
+      assert config["default"] == "openrecontemplate", config["default"]
+      for required in ("matrixsize", "fovcm", "trajectoryfile", "orientation"):
+          assert required in ids, required
+      print("label parameters:", len(ids))
+      PY
+
+  - name: Framework and app modules import
+    description: Verify mrdrecon, the app module, and the worked example import with their runtime dependencies
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import example_cgsense, mrdrecon, openrecontemplate
+      import numba, pyfftw, sigpy, SimpleITK, twixtools  # noqa: F401
+
+      assert callable(openrecontemplate.reconstruct)
+      assert callable(openrecontemplate.process)
+      assert mrdrecon.RECON_NAME == "openrecontemplate"
+      # configure() must have propagated the app identity into the metadata keys
+      assert mrdrecon.META_IMAGE_TYPE == "OPENRECONTEMPLATE", mrdrecon.META_IMAGE_TYPE
+      for name in ("estimate_sensitivities", "combine_coils",
+                   "compress_coils_by_variance", "n4_bias_field_correct"):
+          assert callable(getattr(mrdrecon, name)), name
+      print(mrdrecon.__file__, openrecontemplate.__file__)
+      PY
+
+  - name: Reconstruct a synthetic point source
+    description: Run the shipped adjoint NUFFT end to end on a synthetic radial acquisition
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np
+      import mrdrecon, openrecontemplate
+
+      matrix, fov_cm, samples, readouts, coils = 16, 22.0, 24, 96, 3
+
+      # Golden-angle-ish 3D radial spokes out to the Nyquist radius.
+      rng = np.random.default_rng(0)
+      directions = rng.standard_normal((readouts, 3))
+      directions /= np.linalg.norm(directions, axis=1, keepdims=True)
+      k_max = matrix / (2.0 * fov_cm) * 0.95
+      radii = np.linspace(0.0, k_max, samples)
+      trajectory = (radii[:, None, None] * directions[None, :, :]).astype(np.float32)
+
+      # A delta at the image centre is a constant in k-space.
+      kspace = np.ones((coils, samples, readouts), dtype=np.complex64)
+
+      recon = mrdrecon.ReconInput(
+          kspace=kspace,
+          trajectory=trajectory,
+          raw_kspace=kspace,
+          matrix_size=matrix,
+          fov_cm=fov_cm,
+          config=dict(mrdrecon.OPENRECON_DEFAULTS, dcfiterations=3, coilcombinemode="SoS"),
+          metadata=None,
+      )
+
+      coords = recon.coords_index_units()
+      assert coords.shape == (samples * readouts, 3), coords.shape
+      assert np.abs(coords).max() <= matrix / 2.0 + 1e-3, np.abs(coords).max()
+
+      volume = openrecontemplate.reconstruct(recon)
+      assert volume.shape == (matrix, matrix, matrix), volume.shape
+      assert volume.dtype == np.float32, volume.dtype
+      assert np.all(np.isfinite(volume)), "reconstruction produced non-finite voxels"
+
+      peak = np.unravel_index(int(np.argmax(volume)), volume.shape)
+      centre = matrix // 2
+      assert all(abs(p - centre) <= 1 for p in peak), f"peak at {peak}, expected near {centre}"
+      print("point source reconstructed at", peak, "peak/mean =", volume.max() / volume.mean())
+      PY
+
+  - name: SENSE operators are an adjoint pair
+    description: Verify the CG-SENSE example's forward and adjoint operators satisfy the adjoint identity
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np
+      import example_cgsense
+
+      matrix, coils, points = 8, 2, 400
+      rng = np.random.default_rng(1)
+      coord = rng.uniform(-matrix / 2.0, matrix / 2.0, size=(points, 3)).astype(np.float32)
+      maps = (rng.standard_normal((coils,) + (matrix,) * 3)
+              + 1j * rng.standard_normal((coils,) + (matrix,) * 3)).astype(np.complex64)
+
+      # <A x, y> == <x, A^H y>; CG converges to the wrong answer if this fails.
+      error = example_cgsense.adjoint_test(maps, coord, (matrix,) * 3)
+      assert error < 1e-4, f"adjoint identity violated: relative error {error:.3e}"
+      print("adjoint relative error", error)
+      PY
+
+  - name: Helper scripts render help
+    description: Verify the conversion helpers and the offline driver start and expose command line help
+    script: |
+      python /opt/code/python-ismrmrd-server/twix2mrd.py -h 2>&1 | grep 'usage:'
+      python /opt/code/python-ismrmrd-server/siemens_twix2mrd.py -h 2>&1 | grep 'usage:'
+      python /opt/code/python-ismrmrd-server/mrd2nifti.py -h 2>&1 | grep 'usage:'
+      python /opt/code/python-ismrmrd-server/run_local.py -h 2>&1 | grep 'usage:'

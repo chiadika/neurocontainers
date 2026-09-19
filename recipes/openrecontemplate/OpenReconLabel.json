@@ -1,0 +1,298 @@
+{
+  "general": {
+    "name": {
+      "en": "openrecontemplate"
+    },
+    "version": "VERSION_WILL_BE_REPLACED_BY_SCRIPT",
+    "vendor": "neurodesk",
+    "information": {
+      "en": "Template OpenRecon app: reusable ISMRMRD plumbing with a single reconstruction hook."
+    },
+    "id": "openrecontemplate",
+    "regulatory_information": {
+      "device_trade_name": "openrecontemplate",
+      "production_identifier": "VERSION_WILL_BE_REPLACED_BY_SCRIPT",
+      "manufacturer_address": "Erlangen, Germany",
+      "made_in": "DE",
+      "manufacture_date": "2023/02/14",
+      "material_number": "openrecontemplate_VERSION_WILL_BE_REPLACED_BY_SCRIPT",
+      "gtin": "00860000171212",
+      "udi": "(01)00860000171212(21)1.3.0",
+      "safety_advices": "",
+      "special_operating_instructions": "OpenRecon reconstruction template from raw k-space to magnitude image data",
+      "additional_relevant_information": ""
+    }
+  },
+  "reconstruction": {
+    "transfer_protocol": {
+      "protocol": "ISMRMRD",
+      "version": "1.4.1"
+    },
+    "port": 9002,
+    "emitter": "raw",
+    "injector": "compleximage",
+    "can_process_adjustment_data": true,
+    "can_use_gpu": false,
+    "min_required_memory": 32000,
+    "min_count_required_cpu_cores": 10,
+    "content_qualification_type": "RESEARCH"
+  },
+  "parameters": [
+    {
+      "id": "config",
+      "label": {
+        "en": "config"
+      },
+      "type": "choice",
+      "values": [
+        {
+          "id": "openrecontemplate",
+          "name": {
+            "en": "openrecontemplate"
+          }
+        }
+      ],
+      "default": "openrecontemplate",
+      "information": {
+        "en": "Module the MRD server loads. Must match the app module filename."
+      }
+    },
+    {
+      "id": "trajectoryfile",
+      "label": {
+        "en": "Bundled trajectory"
+      },
+      "type": "choice",
+      "values": [
+        {
+          "id": "/opt/openrecontemplate/23Na_n28_trajectory.h5",
+          "name": {
+            "en": "23Na n28"
+          }
+        },
+        {
+          "id": "/opt/openrecontemplate/23Na_n50_trajectory.h5",
+          "name": {
+            "en": "23Na n50"
+          }
+        }
+      ],
+      "default": "/opt/openrecontemplate/23Na_n28_trajectory.h5",
+      "information": {
+        "en": "Bundled HDF5 trajectory used when the MRD data carries no embedded trajectory."
+      }
+    },
+    {
+      "id": "trajectorysampleoffset",
+      "label": {
+        "en": "Trajectory sample offset"
+      },
+      "type": "int",
+      "minimum": 0,
+      "maximum": 128,
+      "default": 0,
+      "information": {
+        "en": "Leading trajectory samples to skip before pairing the trajectory with the raw samples."
+      }
+    },
+    {
+      "id": "matrixsize",
+      "label": {
+        "en": "Matrix size"
+      },
+      "type": "int",
+      "minimum": 32,
+      "maximum": 512,
+      "default": 128,
+      "information": {
+        "en": "Isotropic output matrix. Runtime and memory scale with its cube."
+      }
+    },
+    {
+      "id": "fovcm",
+      "label": {
+        "en": "FOV cm"
+      },
+      "type": "string",
+      "default": "22.0",
+      "information": {
+        "en": "Reconstruction field of view in cm. Bundled trajectories are in 1/cm units."
+      }
+    },
+    {
+      "id": "applyfermifilter",
+      "label": {
+        "en": "Apply Fermi filter"
+      },
+      "type": "boolean",
+      "default": true,
+      "information": {
+        "en": "Taper the k-space edge before reconstruction to suppress Gibbs ringing."
+      }
+    },
+    {
+      "id": "dcfiterations",
+      "label": {
+        "en": "DCF iterations"
+      },
+      "type": "int",
+      "minimum": 0,
+      "maximum": 30,
+      "default": 5,
+      "information": {
+        "en": "Pipe-Menon density compensation iterations. 0 selects the analytic radial |k|^2 weight."
+      }
+    },
+    {
+      "id": "coilvarianceretention",
+      "label": {
+        "en": "Coil variance retention"
+      },
+      "type": "string",
+      "default": "0.9",
+      "information": {
+        "en": "Fraction of channel covariance the virtual coils must retain."
+      }
+    },
+    {
+      "id": "coilcombinemode",
+      "label": {
+        "en": "Coil combination"
+      },
+      "type": "choice",
+      "values": [
+        {
+          "id": "AC",
+          "name": {
+            "en": "Adaptive"
+          }
+        },
+        {
+          "id": "SoS",
+          "name": {
+            "en": "Sum of squares"
+          }
+        }
+      ],
+      "default": "AC",
+      "information": {
+        "en": "Adaptive (Roemer) combination through smoothed sensitivity maps, or root-sum-of-squares."
+      }
+    },
+    {
+      "id": "maxcoils",
+      "label": {
+        "en": "Max coils"
+      },
+      "type": "int",
+      "minimum": 0,
+      "maximum": 64,
+      "default": 16,
+      "information": {
+        "en": "Reconstruct at most this many physical channels. 0 uses all of them."
+      }
+    },
+    {
+      "id": "maxworkers",
+      "label": {
+        "en": "Max workers"
+      },
+      "type": "int",
+      "minimum": 1,
+      "maximum": 64,
+      "default": 8,
+      "information": {
+        "en": "Upper bound on worker threads, clamped by the container's CPU allocation."
+      }
+    },
+    {
+      "id": "applyn4biascorrection",
+      "label": {
+        "en": "Apply N4 bias correction"
+      },
+      "type": "boolean",
+      "default": false,
+      "information": {
+        "en": "Run SimpleITK N4 bias field correction on the reconstructed magnitude volume."
+      }
+    },
+    {
+      "id": "orientation",
+      "label": {
+        "en": "Orientation"
+      },
+      "type": "choice",
+      "values": [
+        {
+          "id": "zyx",
+          "name": {
+            "en": "zyx"
+          }
+        },
+        {
+          "id": "zyx_fx",
+          "name": {
+            "en": "zyx_fx"
+          }
+        },
+        {
+          "id": "zyx_fy",
+          "name": {
+            "en": "zyx_fy"
+          }
+        },
+        {
+          "id": "zyx_fxy",
+          "name": {
+            "en": "zyx_fxy"
+          }
+        },
+        {
+          "id": "zxy",
+          "name": {
+            "en": "zxy"
+          }
+        },
+        {
+          "id": "zxy_fx",
+          "name": {
+            "en": "zxy_fx"
+          }
+        },
+        {
+          "id": "zxy_fy",
+          "name": {
+            "en": "zxy_fy"
+          }
+        },
+        {
+          "id": "zxy_fxy",
+          "name": {
+            "en": "zxy_fxy"
+          }
+        },
+        {
+          "id": "debug",
+          "name": {
+            "en": "debug"
+          }
+        }
+      ],
+      "default": "zyx_fy",
+      "information": {
+        "en": "Mapping from trajectory components to acquisition axes. 'debug' emits every mapping as a separate series."
+      }
+    },
+    {
+      "id": "orientationflipslice",
+      "label": {
+        "en": "Flip slice order"
+      },
+      "type": "boolean",
+      "default": false,
+      "information": {
+        "en": "Reverse the through-plane order before the display-frame canonicalisation."
+      }
+    }
+  ]
+}

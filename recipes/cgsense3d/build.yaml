@@ -1,0 +1,108 @@
+name: cgsense3d
+version: 1.1.6
+
+copyright:
+  - license: MIT
+    url: https://github.com/NeuroDesk/neurocontainers/blob/main/LICENSE
+
+architectures:
+  - x86_64
+
+files:
+  - name: cgsense3d.py
+    filename: cgsense3d.py
+  - name: mrdrecon.py
+    filename: mrdrecon.py
+  - name: run_local.py
+    filename: run_local.py
+  - name: twix2mrd.py
+    filename: twix2mrd.py
+  - name: siemens_twix2mrd.py
+    filename: siemens_twix2mrd.py
+  - name: mrd2nifti.py
+    filename: mrd2nifti.py
+  - name: OpenReconLabel.json
+    filename: OpenReconLabel.json
+  - name: OpenReconREADME.md
+    filename: OpenReconREADME.md
+  - name: radial3d_trajectory
+    filename: radial3d_n6434_trajectory.h5
+  - name: radial3d_res128_nyquist
+    filename: radial3d_res128_nyquist_trajectory.h5
+  - name: radial3d_res128_us2x
+    filename: radial3d_res128_us2x_trajectory.h5
+  - name: cones3d_n68785
+    filename: cones3d_n68785_trajectory.h5
+  - name: cones3d_n34506
+    filename: cones3d_n34506_trajectory.h5
+
+build:
+  kind: neurodocker
+  base-image: ubuntu:22.04
+  pkg-manager: apt
+
+  directives:
+    - environment:
+        DEBIAN_FRONTEND: noninteractive
+    - install:
+        - bzip2
+        - ca-certificates
+        - git
+        - build-essential
+        - python3-pip
+        - python-is-python3
+    - include: macros/openrecon/neurodocker.yaml
+    - run:
+        - ldconfig
+    - run:
+        - pip3 install --no-cache-dir sigpy==0.1.27 twixtools==0.24
+    - workdir: /opt/cgsense3d
+    - run:
+        - cp {{ get_file("cgsense3d.py") }} /opt/code/python-ismrmrd-server/cgsense3d.py
+        - cp {{ get_file("mrdrecon.py") }} /opt/code/python-ismrmrd-server/mrdrecon.py
+        - cp {{ get_file("run_local.py") }} /opt/code/python-ismrmrd-server/run_local.py
+        - cp {{ get_file("twix2mrd.py") }} /opt/code/python-ismrmrd-server/twix2mrd.py
+        - cp {{ get_file("siemens_twix2mrd.py") }} /opt/code/python-ismrmrd-server/siemens_twix2mrd.py
+        - cp {{ get_file("mrd2nifti.py") }} /opt/code/python-ismrmrd-server/mrd2nifti.py
+        - cp {{ get_file("OpenReconLabel.json") }} /opt/code/python-ismrmrd-server/OpenReconLabel.json
+        - cp {{ get_file("OpenReconREADME.md") }} /opt/cgsense3d/OpenReconREADME.md
+    - run:
+        - cp {{ get_file("radial3d_trajectory") }} /opt/cgsense3d/radial3d_n6434_trajectory.h5
+        - cp {{ get_file("radial3d_res128_nyquist") }} /opt/cgsense3d/radial3d_res128_nyquist_trajectory.h5
+        - cp {{ get_file("radial3d_res128_us2x") }} /opt/cgsense3d/radial3d_res128_us2x_trajectory.h5
+        - cp {{ get_file("cones3d_n68785") }} /opt/cgsense3d/cones3d_n68785_trajectory.h5
+        - cp {{ get_file("cones3d_n34506") }} /opt/cgsense3d/cones3d_n34506_trajectory.h5
+
+deploy:
+  bins:
+    - python
+    - siemens_to_ismrmrd
+
+categories:
+  - image reconstruction
+icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAFZklEQVR42u1bv2sUURDOf5DGwkYOLGwszkIECy1ESKGFChZqsTaSMpWCglyTTnDBSju1EAslnZaLhRYKprLQ5gxiI+g16SzO/ZYbeE7mzZv3Yy8XuIMhl/1x++Z7876ZNzO7srL8LD+9fg6dOTVopWqlbqVpZdzK1CPj2TX17J7BQVV6OFNCU9Yq49lvDQ+C4pi1batyxzeuTY/euBADBn67WlTFo2e7+v5yevHtg1SrqBbF1Bs+wJOb66aZtQIAS4EI55p9Wxrtg0fSYKE4FLv07lERAA6vnemuu/7lqXbdaJ6Kr7aypQ366qcn3aBDVmABANaE6849vx8CFGNanYdLC5LciXs3TYO2AEBgHrl83kqSgz7X+8RCUjBbmCwGju+pAGDdJxDlpDgvzGZ+EsPUmH0MHiacCsDa683uGlhUpJeYFLOE2Zrfds377OM7wUHAZDF4mHAKAJb7XYsDWIxztotwAic8KG8kpU45XHvs1pVoAE4/3OjO429IeXgcXCu4yq1eXB2ZdwgEIkPMTiwAxCEa+bnKK8tklEN6wTUeAkFjcR8AFi9iVJ5kmAJAYyU6baCaKfsACC2dSOW7iDElto9iex8IRGZSJCcBQJGkj/wSlCepYgAYp7g8Hwg+dyYBoLnPDOW7DVTx2beCAFOWlOXHKICC8AAqU3m7Fbg+P3KvroIg7Q84AL64P0d5HhuYmZ8Gg4HjoVpIawFBUo4DIIGUojx4B6RLrpSBMNQAqF3k6MFEYhi8ZVMigeBuawlMFwBaJu42OlZ5/AbxDQn+Z5NXR5EfgCCFSDDo0IAkEOgY3esCwM9Zlcd1sC6yHgIZFuCZrLG24Yl6EL4rD9oDAndxBAB3lRblaWLIzK0TM5NBFvv7TE0KXDgIbpBDg3aDpZDyOJa6NFVv4K5/q3CyodmFpbjrzgXBDXMJAJf8JOXxHGzC+HNiyJlJnRT6hjY+NLskUJIY2AUBitz9+Wb64vfnTvAd93LlsbuTftMXIkdIkx39aX7XtzZxfH3n1fTj7s70z9/d/wTHcA7WE8s1KWl1CYBpSYFpQmnOzpLyJO9/fd3jbTzp8GzpHQBOmph9mLpPeZLb37a69V5wtuMAoERkH4L1HgIA1/TxbFifC6oXAKxhmF4fYgHg2Y8PvTybR4RzWwLkKsEFliWAa+ANMlzcYnAArXtOaiES5EFOX3zQixvU4nIKcuDqoKikPM5R7JCy/8h1g01J309mzGN72haD7cEJWPNk9jxsxn20fArHBE2RUJhHfxSXa/t5AoDqC24E6M48zyfAO/H9R0ZUWCdvhqzxv29X56bJXdN2ldYyS4X2BVX0djh2BiTlebGTvkvFVEvK3WKB5u2wRIQpOQBtP0+DpfDWBYOWhFs/sBZfInMDY1NKjEeEVhb2KS8VO10AfMVQKwiaF2KTVZuSogAgNtmgJTOkGeZJUW4hKSDwpI0AwNCcFo+NAbRMjlTs5ABoxdQUEKQOkl4KI5Y0ljR4qViiFVMLgFAVL41ZEph0nnsMCQDKD/qaMDJAGBcvjlqzt75ipwSAVkzNBKEqWh635u15vt9SHtfuSQShKdogEVO08BU7NQB8xdQMEIbFWmRiylWhJkdNSWuzpQGEUdEmqZjWtVCTowaAtdky0FOQ1yQltclhRiyZWosZa+dDy0eyNnZdmTa51EZJi6WEALI0W/beKJnSKmtxZRYAQv1Cc2uVjW2WtjY5Wpg+1DE2t2bpmHZ5S5OjFYBQs+Vc2+VjXpgwDNjcCU5kuBAvTFhemQEIFua2AgBL8ljT/r0yU+KlKcyqxVIW9qWp3NfmMKuR1Z/FfG1u+eLk8tXZ5efAfv4BCPYeOtG8olkAAAAASUVORK5CYII="
+
+readme: |-
+  ----------------------------------
+  ## cgsense3d/{{ context.version }} ##
+  CG-SENSE reconstruction for 3D centre-out radial acquisitions, with ESPIRiT
+  coil sensitivity estimation and a Toeplitz-accelerated normal operator.
+
+  The bundled trajectory was integrated from the Pulseq gradient waveforms of
+  `radial3d_n6434_s117_c0.seq`: 6434 centre-out spokes, 32 samples each,
+  stored in cycles/cm as dataset `k` with shape (32, 6434, 3).
+
+  Reconstruct offline without a scanner:
+  ```bash
+  python /opt/code/python-ismrmrd-server/run_local.py raw.h5 -o recon.nii.gz -m cgsense3d
+  ```
+
+  Build the recipe with:
+  ```bash
+  source env/bin/activate
+  python -m builder generate cgsense3d --recreate --architecture x86_64
+  sf-build cgsense3d --architecture x86_64
+  ```
+
+  Runtime notes are documented in `recipes/cgsense3d/OpenReconREADME.md`.
+  ----------------------------------

@@ -1,0 +1,110 @@
+# quickgrid container test suite: assets, imports, a phantom gridding
+# reconstruction through a real trajectory, and the cones DCF path.
+
+name: quickgrid
+version: 1.1.0
+default_timeout: 600
+
+test_data:
+  output_dir: test_output
+
+setup:
+  script: |
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p ${output_dir}
+
+tests:
+  - name: OpenRecon server help
+    description: Verify the python-ismrmrd server entrypoint starts correctly
+    script: |
+      python /opt/code/python-ismrmrd-server/main.py -h 2>&1 | sed -n '1,20p' | grep 'Example server for MRD streaming format'
+
+  - name: Trajectory assets and label
+    description: Every bundled trajectory is readable, has distinct shape, cones carry a matching dcf, label is within the 14-parameter cap
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import json, h5py, numpy as np, quickgrid
+      from pathlib import Path
+      shapes = {}
+      for key, path in quickgrid.BUNDLED_TRAJECTORIES.items():
+          with h5py.File(path, "r") as h:
+              k = h["k"]; shapes[key] = k.shape[:2]
+              assert k.shape[-1] == 3, (key, k.shape)
+              if key.startswith("cones"):
+                  assert "dcf" in h and h["dcf"].shape == k.shape[:2], (key, list(h))
+                  assert np.all(np.isfinite(h["dcf"][...])) and h["dcf"][...].min() >= 0
+              print("  %-24s k%s%s" % (key, k.shape, "  +dcf" if "dcf" in h else ""))
+      assert len(set(shapes.values())) == len(shapes), "auto-selection needs distinct shapes"
+      label = json.loads(Path("OpenReconLabel.json").read_text())
+      assert len(label["parameters"]) <= 14
+      assert next(p for p in label["parameters"] if p["id"] == "config")["default"] == "quickgrid"
+      choices = {v["id"] for p in label["parameters"] if p["id"] == "trajectoryfile" for v in p["values"]}
+      assert set(quickgrid.BUNDLED_TRAJECTORIES.values()) <= choices, choices
+      print("label OK:", len(label["parameters"]), "parameters")
+      PY
+
+  - name: Modules import and framework is configured
+    description: The app module registers itself with the shared framework
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import quickgrid, mrdrecon, sigpy, sigpy.mri  # noqa: F401
+      assert callable(quickgrid.reconstruct) and callable(quickgrid.process)
+      assert mrdrecon.RECON_NAME == "quickgrid"
+      assert mrdrecon.OPENRECON_DEFAULTS["maxcoils"] == 16
+      assert mrdrecon.EMIT_VOLUME_AS_SINGLE_IMAGE is False
+      print(quickgrid.__file__)
+      PY
+
+  - name: Phantom gridding through the real radial trajectory
+    description: Simulate multi-coil k-space on the bundled 32^3 trajectory and check the gridded image against the phantom
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, h5py, sigpy, mrdrecon, quickgrid, time
+      with h5py.File(quickgrid.BUNDLED_TRAJECTORIES["radial3d_n6434"], "r") as h:
+          traj = h["k"][:]
+      N, fov, coils = 32, 22.0, 4
+      g = np.stack(np.meshgrid(*[np.linspace(-1, 1, N)]*3, indexing="ij"))
+      r = np.linalg.norm(g, axis=0)
+      truth = ((r < 0.7).astype(np.float32) + 0.6*(np.abs(g[0]) < 0.2)*(r < 0.7)).astype(np.float32)
+      mps = np.stack([np.exp(-((g[i % 3] - (0.6 if i < 2 else -0.6))**2)).astype(np.float32)
+                      for i in range(coils)]).astype(np.complex64)
+      coord = (traj.reshape(-1, 3) * fov).astype(np.float32)
+      y = sigpy.nufft(mps * truth[None], coord)                       # (coils, points)
+      y = y.reshape(coils, traj.shape[0], traj.shape[1]).astype(np.complex64)
+      recon = mrdrecon.ReconInput(
+          kspace=y, trajectory=traj, raw_kspace=np.transpose(y, (0, 2, 1)),
+          matrix_size=N, fov_cm=fov, config=dict(quickgrid.DEFAULTS, dcfmode="auto", coilcombinemode="SoS"),
+          metadata=None, trajectory_source=quickgrid.BUNDLED_TRAJECTORIES["radial3d_n6434"])
+      t0 = time.time(); vol = quickgrid.reconstruct(recon); dt = time.time() - t0
+      assert vol.shape == (N, N, N) and vol.dtype == np.float32 and np.all(np.isfinite(vol))
+      sos_truth = np.sqrt(np.sum(np.abs(mps * truth[None])**2, axis=0))
+      corr = np.corrcoef(vol.ravel(), sos_truth.ravel())[0, 1]
+      print("gridding %.1fs, correlation with SoS phantom %.3f" % (dt, corr))
+      assert corr > 0.9, corr
+      # adaptive combine must also run
+      recon.config["coilcombinemode"] = "AC"
+      vol2 = quickgrid.reconstruct(recon)
+      assert vol2.shape == vol.shape and np.all(np.isfinite(vol2))
+      print("adaptive combine OK")
+      PY
+
+  - name: Cones uses its shipped DCF
+    description: The precomputed dcf must be picked up for cones instead of a slow Pipe-Menon run
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, h5py, mrdrecon, quickgrid, logging
+      path = quickgrid.BUNDLED_TRAJECTORIES["cones3d_n4846"]
+      with h5py.File(path, "r") as h:
+          traj = h["k"][:]; dcf = h["dcf"][...]
+      recon = mrdrecon.ReconInput(
+          kspace=np.zeros((1,) + traj.shape[:2], np.complex64), trajectory=traj,
+          raw_kspace=np.zeros((1, traj.shape[1], traj.shape[0]), np.complex64),
+          matrix_size=134, fov_cm=22.0, config=dict(quickgrid.DEFAULTS, dcfmode="auto"),
+          metadata=None, trajectory_source=path)
+      coord = recon.coords_index_units()
+      w = quickgrid.density_compensation(recon, coord)
+      assert w.shape == (traj.size // 3,) and np.allclose(w, dcf.ravel())
+      assert float(np.abs(coord).max()) <= 67.0 + 1e-3, "cones must fit a 134 matrix"
+      print("cones dcf: %d weights from file, |k|max %.2f of 67" % (w.size, np.abs(coord).max()))
+      PY

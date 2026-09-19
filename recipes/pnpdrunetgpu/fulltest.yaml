@@ -1,0 +1,390 @@
+# pnpdrunetgpu container test suite
+# Verifies the DRUNet checkpoint, the vendored architecture, that the denoiser
+# actually denoises, and an end-to-end plug-and-play reconstruction.
+
+name: pnpdrunetgpu
+version: 1.1.0
+default_timeout: 1800
+
+test_data:
+  output_dir: test_output
+
+setup:
+  script: |
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p ${output_dir}
+
+tests:
+  - name: OpenRecon server help
+    description: Verify the python-ismrmrd server entrypoint starts correctly
+    script: |
+      python /opt/code/python-ismrmrd-server/main.py -h 2>&1 | sed -n '1,20p' | grep 'Example server for MRD streaming format'
+
+  - name: Assets present and label valid
+    description: Verify the checkpoint, trajectories and OpenRecon label are installed and consistent
+    script: |
+      python - <<'PY'
+      import hashlib, json, numpy as np, h5py
+      from pathlib import Path
+
+      ckpt = Path("/opt/pnpdrunetgpu/drunet_gray.pth")
+      digest = hashlib.md5(ckpt.read_bytes()).hexdigest()
+      assert digest == "f3a001301c519d4c18438a2f4e87cb68", digest
+      print("checkpoint md5 OK, %.1f MB" % (ckpt.stat().st_size / 1e6))
+
+      expected = {
+          "radial3d_n6434_trajectory.h5":          ((32, 6434, 3),   0.7159),
+          "radial3d_res128_nyquist_trajectory.h5": ((128, 51071, 3), 2.8977),
+          "radial3d_res128_us2x_trajectory.h5":    ((128, 25536, 3), 2.8977),
+      }
+      for name, (shape, km) in expected.items():
+          with h5py.File("/opt/pnpdrunetgpu/" + name, "r") as h:
+              k = h["k"][:]
+          assert k.shape == shape, (name, k.shape)
+          assert abs(float(np.linalg.norm(k, axis=-1).max()) - km) < 1e-3, name
+          print("  %-42s %s" % (name, k.shape))
+
+      label = json.loads(Path("/opt/code/python-ismrmrd-server/OpenReconLabel.json").read_text())
+      assert len(label["parameters"]) <= 14, len(label["parameters"])
+      cfg = next(p for p in label["parameters"] if p["id"] == "config")
+      assert cfg["default"] == "pnpdrunetgpu", cfg["default"]
+      for p in label["parameters"]:
+          if p["type"] == "choice":
+              assert p["default"] in [v["id"] for v in p["values"]], p["id"]
+      assert label["reconstruction"]["content_qualification_type"] == "RESEARCH"
+      print("label OK:", len(label["parameters"]), "parameters")
+      PY
+
+  - name: DRUNet loads strictly and denoises
+    description: The vendored architecture must match the released checkpoint exactly and actually reduce noise
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, torch
+      from drunet import load_drunet
+
+      # strict=True inside load_drunet: any architecture drift raises here
+      model = load_drunet("/opt/pnpdrunetgpu/drunet_gray.pth")
+      n_par = sum(p.numel() for p in model.parameters())
+      print("DRUNet loaded, %.2f M parameters" % (n_par / 1e6))
+
+      rng = np.random.default_rng(0)
+      g = np.stack(np.meshgrid(np.linspace(-1, 1, 128), np.linspace(-1, 1, 128), indexing="ij"))
+      clean = ((np.linalg.norm(g, axis=0) < 0.6).astype(np.float32) * 0.8 + 0.1)
+      sigma = 0.1
+      noisy = clean + rng.standard_normal(clean.shape).astype(np.float32) * sigma
+
+      with torch.no_grad():
+          x = torch.from_numpy(noisy)[None, None]
+          s = torch.full_like(x, sigma)
+          out = model(torch.cat([x, s], 1))[0, 0].numpy()
+
+      before = float(np.sqrt(((noisy - clean) ** 2).mean()))
+      after = float(np.sqrt(((out - clean) ** 2).mean()))
+      print("RMSE  noisy %.4f  ->  denoised %.4f  (%.1fx better)" % (before, after, before / after))
+      assert out.shape == clean.shape, out.shape
+      assert np.all(np.isfinite(out))
+      assert after < before / 2, (before, after)
+
+      # non-multiple-of-8 input must still round-trip (internal padding)
+      with torch.no_grad():
+          odd = torch.zeros(1, 2, 61, 67)
+          assert model(odd).shape[-2:] == (61, 67)
+      print("odd-size padding OK")
+      PY
+
+  - name: Device selection resolves and falls back safely
+    description: CUDA must be verified with a real kernel, and every path must end at a usable device
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, torch, pnpdrunetgpu
+
+      print("torch", torch.__version__, "| built for CUDA", torch.version.cuda,
+            "| cuda available:", torch.cuda.is_available())
+
+      # The OpenRecon packaging step (openrecon/recipes/checkCudaVersion.py) refuses
+      # any image whose torch CUDA version exceeds 11.8. Guard that here so a torch
+      # bump cannot silently make the container unpackageable.
+      # This recipe ships in two variants. A CPU wheel reports None, which
+      # trivially satisfies the ceiling; a CUDA wheel must be <= 11.8.
+      from packaging import version as _v
+      assert torch.version.cuda is not None, "the GPU variant must ship a CUDA torch build"
+      if True:
+          assert _v.parse(torch.version.cuda) <= _v.parse("11.8"), torch.version.cuda
+          print("CUDA build version %s is within the OpenRecon 11.8 ceiling" % torch.version.cuda)
+
+      # Forcing CPU must always give CPU.
+      pnpdrunetgpu._DEVICE = None
+      assert pnpdrunetgpu.resolve_device("cpu").type == "cpu"
+
+      # 'auto' must resolve to something usable either way, and must be cached.
+      pnpdrunetgpu._DEVICE = None
+      dev = pnpdrunetgpu.resolve_device("auto")
+      assert dev.type in ("cuda", "cpu"), dev
+      assert pnpdrunetgpu.resolve_device("auto") is dev, "device resolution is not cached"
+      print("auto ->", dev)
+
+      # Forcing CUDA on a host without a usable GPU must fall back, not raise.
+      pnpdrunetgpu._DEVICE = None
+      forced = pnpdrunetgpu.resolve_device("cuda")
+      assert forced.type in ("cuda", "cpu"), forced
+      print("forced cuda ->", forced, "(fallback exercised)" if forced.type == "cpu" else "")
+
+      # The denoiser must produce identical-shaped output on whatever we resolved.
+      pnpdrunetgpu._DEVICE = None
+      rng = np.random.default_rng(0)
+      vol = (rng.standard_normal((16, 16, 16)) + 1j*rng.standard_normal((16, 16, 16))).astype(np.complex64)
+      out = pnpdrunetgpu.denoise_volume(vol, sigma=0.05, axes=1, batch=8)
+      assert out.shape == vol.shape and np.all(np.isfinite(out))
+      print("denoise on resolved device OK")
+      PY
+
+  - name: Modules import
+    description: Verify the app, operators and framework import with their runtime dependencies
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import pnpdrunetgpu, reconops, mrdrecon, drunet, torch, sigpy  # noqa: F401
+      assert callable(pnpdrunetgpu.reconstruct) and callable(pnpdrunetgpu.process)
+      assert mrdrecon.RECON_NAME == "pnpdrunetgpu"
+      assert mrdrecon.OPENRECON_DEFAULTS["pnpiterations"] == 6
+      print("torch", torch.__version__, "| threads", torch.get_num_threads())
+      PY
+
+  - name: Complex volume denoiser preserves shape and reduces noise
+    description: The slice-wise complex denoiser must act on real and imaginary parts without corrupting the volume
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, pnpdrunetgpu
+
+      N = 32
+      g = np.stack(np.meshgrid(*[np.linspace(-1, 1, N)]*3, indexing="ij"))
+      clean = ((np.linalg.norm(g, axis=0) < 0.6).astype(np.complex64)) * (0.8 + 0.3j)
+      rng = np.random.default_rng(0)
+      noisy = clean + (rng.standard_normal(clean.shape) + 1j*rng.standard_normal(clean.shape)).astype(np.complex64) * 0.08
+
+      out = pnpdrunetgpu.denoise_volume(noisy, sigma=0.08, axes=1, batch=16)
+      assert out.shape == clean.shape and out.dtype == np.complex64, (out.shape, out.dtype)
+      assert np.all(np.isfinite(out))
+      before = float(np.abs(noisy - clean).mean())
+      after = float(np.abs(out - clean).mean())
+      print("complex volume MAE  %.4f -> %.4f" % (before, after))
+      assert after < before, (before, after)
+
+      out3 = pnpdrunetgpu.denoise_volume(noisy, sigma=0.08, axes=3, batch=16)
+      assert out3.shape == clean.shape and np.all(np.isfinite(out3))
+      print("3-orientation denoise MAE %.4f" % float(np.abs(out3 - clean).mean()))
+      PY
+
+  - name: End-to-end plug-and-play reconstruction
+    description: Reconstruct a simulated phantom through the real trajectory and check it against ground truth
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, h5py, sigpy, mrdrecon, pnpdrunetgpu
+
+      with h5py.File("/opt/pnpdrunetgpu/radial3d_n6434_trajectory.h5", "r") as h:
+          traj = h["k"][:]
+      N, fov, coils = 32, 22.0, 4
+
+      g = np.stack(np.meshgrid(*[np.linspace(-1, 1, N)]*3, indexing="ij"))
+      r = np.linalg.norm(g, axis=0)
+      truth = ((r < 0.7).astype(np.float32) + 0.6*(np.abs(g[0]) < 0.2)*(r < 0.7)).astype(np.complex64)
+      mps = np.stack([np.exp(-((g[i % 3] - (0.6 if i < 2 else -0.6))**2).astype(np.float32))
+                      * np.exp(1j*0.5*g[(i+1) % 3]) for i in range(coils)]).astype(np.complex64)
+      mps /= np.sqrt((np.abs(mps)**2).sum(0))[None] + 1e-8
+
+      coord = (traj.reshape(-1, 3) * fov).astype(np.float32)
+      y = np.stack([sigpy.nufft(mps[c]*truth, coord) for c in range(coils)]).astype(np.complex64)
+      rng = np.random.default_rng(0)
+      y += (rng.standard_normal(y.shape) + 1j*rng.standard_normal(y.shape)).astype(np.complex64) * 0.02*np.abs(y).mean()
+
+      recon = mrdrecon.ReconInput(
+          kspace=y.reshape(coils, traj.shape[0], traj.shape[1]), trajectory=traj,
+          raw_kspace=y, matrix_size=N, fov_cm=fov,
+          config=dict(mrdrecon.OPENRECON_DEFAULTS, pnpiterations=4, pnpinnercg=3,
+                      espiritmatrix=32, denoisebatch=16),
+          metadata=None)
+
+      vol = pnpdrunetgpu.reconstruct(recon)
+      assert vol.shape == (N,)*3 and vol.dtype == np.float32 and np.all(np.isfinite(vol))
+      ref = np.abs(truth)
+      s = (vol*ref).sum() / max((vol*vol).sum(), 1e-30)
+      nrmse = np.linalg.norm(vol*s - ref) / np.linalg.norm(ref)
+      print("NRMSE against ground truth: %.4f" % nrmse)
+      assert nrmse < 0.40, nrmse
+      PY
+
+  - name: Trajectory auto-selection and mismatch rejection
+    description: The right trajectory must be chosen from the acquired data, and a wrong explicit choice must be refused
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, mrdrecon, pnpdrunetgpu
+
+      class FakeAcq:
+          def __init__(self, ns):
+              self.data = np.zeros((4, ns), dtype=np.complex64)
+              self.traj = None
+
+      def load(nsamp, nread, cfg):
+          return mrdrecon._load_trajectory([FakeAcq(nsamp) for _ in range(nread)], cfg)
+
+      # Each bundled sequence must be recovered from its acquired shape alone.
+      for nsamp, nread in ((32, 6434), (128, 51071), (128, 25536)):
+          t = load(nsamp, nread, {"parameters": {"trajectoryfile": "auto"}})
+          assert t.shape[:2] == (nsamp, nread), (nsamp, nread, t.shape)
+          print("  auto: samples=%-4d readouts=%-6d -> %s" % (nsamp, nread, t.shape))
+
+      # Phyllotaxis directions depend on the total spoke count, so using one
+      # sequence's trajectory for another is wrong, not merely degraded. It must
+      # raise rather than let _clip_data_to_trajectory crop silently.
+      wrong = "/opt/pnpdrunetgpu/radial3d_res128_nyquist_trajectory.h5"
+      try:
+          load(128, 25536, {"parameters": {"trajectoryfile": wrong}})
+          raise AssertionError("mismatched trajectory was accepted")
+      except ValueError as exc:
+          assert "must match exactly" in str(exc), str(exc)
+          print("  mismatch correctly rejected")
+
+      try:
+          load(64, 999, {"parameters": {"trajectoryfile": "auto"}})
+          raise AssertionError("unknown acquisition shape was accepted")
+      except ValueError as exc:
+          assert "No bundled trajectory matches" in str(exc), str(exc)
+          print("  unknown shape correctly rejected")
+      PY
+
+  - name: Density compensation modes
+    description: file/analytic/pipe/auto must each select the right weighting and fail loudly when they cannot
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, h5py, tempfile, os, mrdrecon, pnpdrunetgpu, reconops
+
+      N, fov = 32, 22.0
+      with h5py.File("/opt/pnpdrunetgpu/radial3d_n6434_trajectory.h5", "r") as h:
+          traj = h["k"][:]
+      shape = traj.shape[:2]
+
+      def make(cfg, source=None):
+          return mrdrecon.ReconInput(
+              kspace=np.ones((2,) + shape, dtype=np.complex64), trajectory=traj,
+              raw_kspace=None, matrix_size=N, fov_cm=fov,
+              config=dict(mrdrecon.OPENRECON_DEFAULTS, **cfg),
+              metadata=None, trajectory_source=source)
+
+      # analytic: |k|^2 on a uniform radial trajectory
+      w = reconops.density_compensation(make({"dcfmode": "analytic"}))
+      assert w.shape == (shape[0]*shape[1],) and np.all(np.isfinite(w)) and w.max() > 0
+      print("analytic OK", w.shape, "range %.2e..%.2f" % (w.min(), w.max()))
+
+      # auto on a uniform radial trajectory with no file -> analytic, no Pipe-Menon
+      wa = reconops.density_compensation(make({"dcfmode": "auto"}))
+      assert np.allclose(wa, w), "auto should have chosen analytic here"
+      print("auto -> analytic OK")
+
+      # file: precomputed dcf is read back verbatim
+      with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as tmp:
+          path = tmp.name
+      ref = np.linspace(0.01, 1.0, shape[0]*shape[1]).reshape(shape).astype(np.float32)
+      with h5py.File(path, "w") as h:
+          h.create_dataset("k", data=traj)
+          d = h.create_dataset("dcf", data=ref); d.attrs["method"] = "test"
+      wf = reconops.density_compensation(make({"dcfmode": "file"}, source=path))
+      assert np.allclose(wf, ref.ravel()), "stored dcf was not returned verbatim"
+      print("file OK, matched stored values exactly")
+
+      # auto prefers the stored dcf over analytic
+      wauto = reconops.density_compensation(make({"dcfmode": "auto"}, source=path))
+      assert np.allclose(wauto, ref.ravel()), "auto should prefer the stored dcf"
+      print("auto -> file OK")
+
+      # file with no dcf present must raise, not silently fall back
+      with h5py.File(path, "w") as h:
+          h.create_dataset("k", data=traj)
+      try:
+          reconops.density_compensation(make({"dcfmode": "file"}, source=path))
+          raise AssertionError("dcfmode=file accepted a file with no dcf dataset")
+      except ValueError as e:
+          assert "no 'dcf' dataset" in str(e), str(e)
+          print("missing dcf correctly rejected")
+
+      # a wrong-length dcf must raise rather than corrupt the weighting
+      with h5py.File(path, "w") as h:
+          h.create_dataset("k", data=traj)
+          h.create_dataset("dcf", data=np.ones(7, dtype=np.float32))
+      try:
+          reconops.density_compensation(make({"dcfmode": "auto"}, source=path))
+          raise AssertionError("a wrong-length dcf was accepted")
+      except ValueError as e:
+          assert "must correspond" in str(e), str(e)
+          print("wrong-length dcf correctly rejected")
+      os.unlink(path)
+
+      # bad mode name
+      try:
+          reconops.density_compensation(make({"dcfmode": "nonsense"}))
+          raise AssertionError("an invalid dcfmode was accepted")
+      except ValueError:
+          print("invalid dcfmode correctly rejected")
+      PY
+
+  - name: Parallel normal operator is bit-identical to serial
+    description: The threaded coil loop must accumulate in fixed coil order, or results depend on thread scheduling
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, pnpdrunetgpu, reconops
+
+      N, coils, pts = 24, 10, 40000
+      rng = np.random.default_rng(0)
+      coord = rng.uniform(-N/2, N/2, (pts, 3)).astype(np.float32)
+      w = np.abs(rng.standard_normal(pts)).astype(np.float32)
+      maps = (rng.standard_normal((coils,)+(N,)*3) + 1j*rng.standard_normal((coils,)+(N,)*3)).astype(np.complex64)
+
+      serial_op = reconops.build_normal_operator(maps, coord, w, (N,)*3, 1e-3, use_toeplitz=True, max_workers=1)
+      parallel_op = reconops.build_normal_operator(maps, coord, w, (N,)*3, 1e-3, use_toeplitz=True, max_workers=8)
+
+      for i in range(3):
+          x = (rng.standard_normal((N,)*3) + 1j*rng.standard_normal((N,)*3)).astype(np.complex64)
+          a, b = serial_op(x), parallel_op(x)
+          assert np.array_equal(a, b), (i, float(np.abs(a-b).max()))
+          print("  vector %d: bitwise identical (max|diff|=%.1e)" % (i, float(np.abs(a-b).max())))
+      print("parallel normal operator is bit-identical to serial")
+      PY
+
+  - name: Emitted image carries a usable acquisition timestamp
+    description: The Pulseq interpreter leaves the raw timestamp at zero; passing that through makes ICE fail in FillMiniHead
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, mrdrecon, ismrmrd
+
+      # A real AcquisitionHeader defaults every field to zero, which is exactly
+      # the shape the Pulseq interpreter produces -- and unlike a stand-in object
+      # it carries every field update_img_header_from_raw copies.
+      raw = ismrmrd.AcquisitionHeader()
+      raw.version = 1
+      raw.measurement_uid = 1
+      raw.position = (0.0, 0.0, 0.0)
+      raw.read_dir = (-1.0, 0.0, 0.0)
+      raw.phase_dir = (0.0, 1.0, 0.0)
+      raw.slice_dir = (0.0, 0.0, 1.0)
+      raw.patient_table_position = (0.0, 0.0, 0.0)
+      assert int(raw.acquisition_time_stamp) == 0, "expected a zeroed raw timestamp"
+
+      meta = ismrmrd.xsd.ismrmrdHeader(
+          experimentalConditions=ismrmrd.xsd.experimentalConditionsType(H1resonanceFrequency_Hz=123200000))
+
+      vol = np.abs(np.random.default_rng(0).standard_normal((16, 16, 16))).astype(np.float32)
+      images = mrdrecon._build_output_images(vol, raw, meta, output_fov_mm=220.0)
+      head = images[0].getHead()
+      ts = int(head.acquisition_time_stamp)
+      print("raw timestamp 0 -> emitted", ts)
+      assert ts > 0, "zero timestamp would make ICE fail in m_pTimeOfFirstScan->setValue"
+      assert any(int(v) for v in head.physiology_time_stamp), "physiology timestamp still all zero"
+      print("emitted image carries a usable timestamp")
+      PY
+
+  - name: Helper scripts render help
+    description: Verify the conversion helpers and the offline driver expose command line help
+    script: |
+      python /opt/code/python-ismrmrd-server/twix2mrd.py -h 2>&1 | grep 'usage:'
+      python /opt/code/python-ismrmrd-server/siemens_twix2mrd.py -h 2>&1 | grep 'usage:'
+      python /opt/code/python-ismrmrd-server/mrd2nifti.py -h 2>&1 | grep 'usage:'
+      python /opt/code/python-ismrmrd-server/run_local.py -h 2>&1 | grep 'usage:'

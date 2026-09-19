@@ -1,0 +1,344 @@
+{
+  "general": {
+    "name": {
+      "en": "cgsense3d"
+    },
+    "version": "VERSION_WILL_BE_REPLACED_BY_SCRIPT",
+    "vendor": "neurodesk",
+    "information": {
+      "en": "CG-SENSE reconstruction for 3D centre-out radial with ESPIRiT coil maps."
+    },
+    "id": "cgsense3d",
+    "regulatory_information": {
+      "device_trade_name": "cgsense3d",
+      "production_identifier": "VERSION_WILL_BE_REPLACED_BY_SCRIPT",
+      "manufacturer_address": "Erlangen, Germany",
+      "made_in": "DE",
+      "manufacture_date": "2023/02/14",
+      "material_number": "cgsense3d_VERSION_WILL_BE_REPLACED_BY_SCRIPT",
+      "gtin": "00860000171212",
+      "udi": "(01)00860000171212(21)1.3.0",
+      "safety_advices": "",
+      "special_operating_instructions": "OpenRecon CG-SENSE reconstruction from raw k-space to magnitude image data",
+      "additional_relevant_information": ""
+    }
+  },
+  "reconstruction": {
+    "transfer_protocol": {
+      "protocol": "ISMRMRD",
+      "version": "1.4.1"
+    },
+    "port": 9002,
+    "emitter": "raw",
+    "injector": "compleximage",
+    "can_process_adjustment_data": true,
+    "can_use_gpu": false,
+    "min_required_memory": 32000,
+    "min_count_required_cpu_cores": 10,
+    "content_qualification_type": "RESEARCH"
+  },
+  "parameters": [
+    {
+      "id": "config",
+      "label": {
+        "en": "config"
+      },
+      "type": "choice",
+      "values": [
+        {
+          "id": "cgsense3d",
+          "name": {
+            "en": "cgsense3d"
+          }
+        }
+      ],
+      "default": "cgsense3d",
+      "information": {
+        "en": "Module the MRD server loads. Must match the app module filename."
+      }
+    },
+    {
+      "id": "trajectoryfile",
+      "label": {
+        "en": "Bundled trajectory"
+      },
+      "type": "choice",
+      "values": [
+        {
+          "id": "auto",
+          "name": {
+            "en": "Auto (match the acquired data)"
+          }
+        },
+        {
+          "id": "/opt/cgsense3d/radial3d_res128_us2x_trajectory.h5",
+          "name": {
+            "en": "128^3, 2x undersampled (25536 spokes, 2.6 min)"
+          }
+        },
+        {
+          "id": "/opt/cgsense3d/radial3d_res128_nyquist_trajectory.h5",
+          "name": {
+            "en": "128^3, Nyquist (51071 spokes, 5.2 min)"
+          }
+        },
+        {
+          "id": "/opt/cgsense3d/radial3d_n6434_trajectory.h5",
+          "name": {
+            "en": "32^3, original sequence (6434 spokes, 39 s)"
+          }
+        },
+        {
+          "id": "/opt/cgsense3d/cones3d_n68785_trajectory.h5",
+          "name": {
+            "en": "cones 256^3 250 mm TE50 R=1 (68785 readouts, matrix 266, FOV 25.0)"
+          }
+        },
+        {
+          "id": "/opt/cgsense3d/cones3d_n34506_trajectory.h5",
+          "name": {
+            "en": "cones 256^3 250 mm TE50 R=2 (34506 readouts, matrix 278, FOV 25.0)"
+          }
+        },
+        {
+          "id": "/tmp/share/cones3d_n206435_trajectory.h5",
+          "name": {
+            "en": "share: cones 512^3 250 mm TR2 R=4 (206435 readouts, matrix 512, FOV 25.0)"
+          }
+        },
+        {
+          "id": "/tmp/share/cones3d_n412489_trajectory.h5",
+          "name": {
+            "en": "share: cones 512^3 250 mm TR2 R=2 (412489 readouts, matrix 512, FOV 25.0)"
+          }
+        }
+      ],
+      "default": "auto",
+      "information": {
+        "en": "Auto matches the acquired (samples, readouts) against the bundled trajectories, which have distinct shapes. Choosing the wrong one by hand does not degrade the image, it produces a wrong one: phyllotaxis directions depend on the total spoke count, so 92% of spokes differ by more than 10 degrees between the bundled 128^3 sets. An explicit choice that disagrees with the data is now rejected. Also searches fire\\share (/tmp/share) for *_trajectory.h5. Cones trajectories carry a precomputed DCF; matrixsize must equal the label extent named here."
+      }
+    },
+    {
+      "id": "matrixsize",
+      "label": {
+        "en": "Matrix size"
+      },
+      "type": "int",
+      "minimum": 16,
+      "maximum": 1024,
+      "default": 128,
+      "information": {
+        "en": "Isotropic output matrix. 128 for the radial sequences (the 32^3 trajectory resolves about 32; larger values interpolate), 266/278 for the 256^3 cones, 512 for the 512^3 cones. Must equal the sequence's LIN/PAR label extent."
+      }
+    },
+    {
+      "id": "fovcm",
+      "label": {
+        "en": "FOV cm"
+      },
+      "type": "string",
+      "default": "22.0",
+      "information": {
+        "en": "Reconstruction field of view in cm. Must match the sequence FOV: 22.0 for the 128^3 sequences, 25.0 for the fov250 cones."
+      }
+    },
+    {
+      "id": "dcfmode",
+      "label": {
+        "en": "Density compensation"
+      },
+      "type": "choice",
+      "values": [
+        {
+          "id": "auto",
+          "name": {
+            "en": "Auto (file, else analytic, else Pipe-Menon)"
+          }
+        },
+        {
+          "id": "file",
+          "name": {
+            "en": "From trajectory file"
+          }
+        },
+        {
+          "id": "analytic",
+          "name": {
+            "en": "Analytic |k|^2 (uniform radial only)"
+          }
+        },
+        {
+          "id": "pipe",
+          "name": {
+            "en": "Pipe-Menon (slow, any trajectory)"
+          }
+        }
+      ],
+      "default": "auto",
+      "information": {
+        "en": "Auto uses a precomputed 'dcf' dataset in the trajectory file if present, falls back to analytic |k|^2 for uniformly-sampled radial, and to Pipe-Menon otherwise. Pipe-Menon at reconstruction time costs minutes: for cones, spirals or variable-density trajectories, precompute with make_dcf.py instead."
+      }
+    },
+    {
+      "id": "cgiterations",
+      "label": {
+        "en": "CG iterations"
+      },
+      "type": "int",
+      "minimum": 1,
+      "maximum": 60,
+      "default": 12,
+      "information": {
+        "en": "Conjugate gradient iterations. Doubles as the regulariser: stop early rather than converge."
+      }
+    },
+    {
+      "id": "cglamda",
+      "label": {
+        "en": "CG regularisation"
+      },
+      "type": "string",
+      "default": "1e-3",
+      "information": {
+        "en": "Tikhonov weight in min ||W^1/2(Ax-y)||^2 + lamda||x||^2."
+      }
+    },
+    {
+      "id": "espiritmatrix",
+      "label": {
+        "en": "ESPIRiT matrix"
+      },
+      "type": "int",
+      "minimum": 16,
+      "maximum": 128,
+      "default": 32,
+      "information": {
+        "en": "Grid size for ESPIRiT calibration. Maps are interpolated up to the output matrix."
+      }
+    },
+    {
+      "id": "espiritthresh",
+      "label": {
+        "en": "ESPIRiT threshold"
+      },
+      "type": "string",
+      "default": "0.02",
+      "information": {
+        "en": "Singular value threshold for the ESPIRiT calibration matrix."
+      }
+    },
+    {
+      "id": "espiritcrop",
+      "label": {
+        "en": "ESPIRiT crop"
+      },
+      "type": "string",
+      "default": "0.8",
+      "information": {
+        "en": "Eigenvalue cutoff defining the sensitivity support mask."
+      }
+    },
+    {
+      "id": "coilvarianceretention",
+      "label": {
+        "en": "Coil variance retention"
+      },
+      "type": "string",
+      "default": "0.95",
+      "information": {
+        "en": "Fraction of channel covariance the PCA virtual coils must retain."
+      }
+    },
+    {
+      "id": "maxcoils",
+      "label": {
+        "en": "Max coils"
+      },
+      "type": "int",
+      "minimum": 0,
+      "maximum": 64,
+      "default": 0,
+      "information": {
+        "en": "Reconstruct at most this many physical channels. 0 uses all of them."
+      }
+    },
+    {
+      "id": "orientation",
+      "label": {
+        "en": "Orientation"
+      },
+      "type": "choice",
+      "values": [
+        {
+          "id": "zyx",
+          "name": {
+            "en": "zyx"
+          }
+        },
+        {
+          "id": "zyx_fx",
+          "name": {
+            "en": "zyx_fx"
+          }
+        },
+        {
+          "id": "zyx_fy",
+          "name": {
+            "en": "zyx_fy"
+          }
+        },
+        {
+          "id": "zyx_fxy",
+          "name": {
+            "en": "zyx_fxy"
+          }
+        },
+        {
+          "id": "zxy",
+          "name": {
+            "en": "zxy"
+          }
+        },
+        {
+          "id": "zxy_fx",
+          "name": {
+            "en": "zxy_fx"
+          }
+        },
+        {
+          "id": "zxy_fy",
+          "name": {
+            "en": "zxy_fy"
+          }
+        },
+        {
+          "id": "zxy_fxy",
+          "name": {
+            "en": "zxy_fxy"
+          }
+        },
+        {
+          "id": "debug",
+          "name": {
+            "en": "debug"
+          }
+        }
+      ],
+      "default": "zyx",
+      "information": {
+        "en": "Mapping from trajectory components to acquisition axes. 'debug' emits every mapping as a separate series."
+      }
+    },
+    {
+      "id": "orientationflipslice",
+      "label": {
+        "en": "Flip slice order"
+      },
+      "type": "boolean",
+      "default": false,
+      "information": {
+        "en": "Reverse the through-plane order before the display-frame canonicalisation."
+      }
+    }
+  ]
+}

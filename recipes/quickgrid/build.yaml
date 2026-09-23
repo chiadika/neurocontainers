@@ -1,5 +1,5 @@
 name: quickgrid
-version: 1.1.1
+version: 1.2.0
 
 copyright:
   - license: MIT
@@ -13,6 +13,8 @@ files:
     filename: quickgrid.py
   - name: mrdrecon.py
     filename: mrdrecon.py
+  - name: gradwarp.py
+    filename: gradwarp.py
   - name: run_local.py
     filename: run_local.py
   - name: twix2mrd.py
@@ -68,6 +70,7 @@ build:
     - run:
         - cp {{ get_file("quickgrid.py") }} /opt/code/python-ismrmrd-server/quickgrid.py
         - cp {{ get_file("mrdrecon.py") }} /opt/code/python-ismrmrd-server/mrdrecon.py
+        - cp {{ get_file("gradwarp.py") }} /opt/code/python-ismrmrd-server/gradwarp.py
         - cp {{ get_file("run_local.py") }} /opt/code/python-ismrmrd-server/run_local.py
         - cp {{ get_file("twix2mrd.py") }} /opt/code/python-ismrmrd-server/twix2mrd.py
         - cp {{ get_file("siemens_twix2mrd.py") }} /opt/code/python-ismrmrd-server/siemens_twix2mrd.py
@@ -107,7 +110,11 @@ readme: |-
   Since 1.1.1 the two 512^3 / 250 mm cones trajectories (R=4 and R=2, analytic
   DCF) are bundled too. `trajectoryfile: auto` matches by shape, and also
   searches `fire\share` (mounted as /tmp/share) for `*_trajectory.h5`. Coils
-  are gridded in parallel processes (`maxworkers`).
+  are gridded in parallel processes (`maxworkers`). Since 1.2.0 the recon
+  applies gradient-nonlinearity (distortion) correction itself from the
+  scanner's Siemens coefficient file (`gradunwarp`, `gradcoeffile`), because
+  FIRE-injected images bypass ICE's DistorCor functor; the file is not bundled
+  and is read from `fire\share` (/tmp/share). `maxcoils` now defaults to 0.
 
   Reconstruct offline without a scanner:
   ```bash

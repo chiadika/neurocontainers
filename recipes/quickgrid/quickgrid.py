@@ -17,6 +17,7 @@ ReconInput into a real-valued volume.
 Where to edit
 -------------
   DEFAULTS            the knobs and their defaults (must mirror OpenReconLabel.json)
+  gradient_unwarp()   gradient-nonlinearity (distortion) correction hook, maths in gradwarp.py
   density_compensation()   how each k-space sample is weighted
   grid()              coil-parallel adjoint NUFFT; the gridder itself is _grid_coils()
   combine()           how coil images become one image
@@ -35,6 +36,8 @@ import h5py
 import numpy as np
 import sigpy
 import sigpy.mri
+
+import gradwarp
 
 import mrdrecon
 
@@ -77,11 +80,13 @@ DEFAULTS = {
     "rejectbadreadouts": False,
     "compresscoils": True,
     "coilvarianceretention": 0.95,
-    "maxcoils": 16,             # bounds run time; 0 = all physical coils
+    "maxcoils": 0,              # 0 = all physical coils (then PCA compression); >0 keeps the first N
     "maxworkers": 8,            # coil-parallel gridding processes (capped by CPUs and memory)
     "applyn4biascorrection": False,
     "orientation": "zyx",
     "orientationflipslice": False,
+    "gradunwarp": "3D",         # off | 3D | 3Dnojac | 2D  (gradient-nonlinearity correction)
+    "gradcoeffile": "auto",     # Siemens coeff_<coil>.grad: 'auto' searches /opt/quickgrid and /tmp/share
 }
 
 mrdrecon.configure(
@@ -306,6 +311,55 @@ def reconstruct(recon):
     volume = combine(coil_images, mode)
     recon.save_debug("coil_images", coil_images)
     return volume
+
+
+def gradient_unwarp(volume, context):
+    """Output hook: correct gradient nonlinearity in the acquisition frame.
+
+    Skips with a warning (never fails the reconstruction) when switched off or
+    when no coefficient file can be found. The file is Siemens-proprietary and
+    is not bundled; copy coeff_<coil>.grad into fire\\share (/tmp/share).
+    """
+    params = context["params"]
+    mode = str(params.get("gradunwarp", "off")).strip()
+    if mode.lower() in ("", "off", "false", "0"):
+        logging.info("gradunwarp: off")
+        return volume
+    coil = None
+    try:
+        coil = str(context["metadata"].acquisitionSystemInformation.systemModel)
+    except Exception:
+        pass
+    path = gradwarp.find_coefficient_file(params.get("gradcoeffile", "auto"), coil_name="IMPULSE")
+    if path is None or not os.path.exists(path):
+        logging.warning("gradunwarp: no gradient coefficient file (gradcoeffile=%r, searched %s); "
+                        "emitting the uncorrected volume",
+                        params.get("gradcoeffile"), gradwarp.COEFF_SEARCH_DIRS)
+        return volume
+    coeffs = gradwarp.read_siemens_grad(path)
+    head = context["reference_head"]
+    try:
+        position = str(context["metadata"].measurementInformation.patientPosition)
+    except Exception:
+        position = "unknown"
+    if position.upper() not in ("HFS", "PATIENTPOSITION.HFS", "UNKNOWN"):
+        logging.warning("gradunwarp: patient position %s; the LPS->coil-frame mapping is validated "
+                        "for HFS only", position)
+    packed, key = mrdrecon.to_acquisition_frame(volume, context["orientation"], context["flip_slice"])
+    n = packed.shape
+    fov = float(context["output_fov_mm"])
+    spacing = [fov / n[0], fov / n[1], fov / n[2]]
+    dirs = [np.asarray(head.slice_dir, float), np.asarray(head.phase_dir, float), np.asarray(head.read_dir, float)]
+    logging.info("gradunwarp: %s from %s (coil %s), centre %s mm, spacing %.3f mm",
+                 mode, path, coil, tuple(round(float(v), 2) for v in head.position), spacing[0])
+    corrected = gradwarp.unwarp_volume(
+        packed, coeffs, center_lps=np.asarray(head.position, float), axis_dirs_lps=dirs,
+        spacing_mm=spacing, mode="2D" if mode.upper().startswith("2D") else "3D",
+        jacobian=mode.lower() not in ("3dnojac", "nojac"))
+    return mrdrecon.from_acquisition_frame(corrected, key, context["flip_slice"])
+
+
+mrdrecon.OUTPUT_VOLUME_HOOKS.append(gradient_unwarp)
 
 
 def process(connection, config, metadata):

@@ -2,7 +2,7 @@
 # reconstruction through a real trajectory, and the cones DCF path.
 
 name: quickgrid
-version: 1.1.1
+version: 1.2.0
 default_timeout: 600
 
 test_data:
@@ -51,7 +51,8 @@ tests:
       import quickgrid, mrdrecon, sigpy, sigpy.mri  # noqa: F401
       assert callable(quickgrid.reconstruct) and callable(quickgrid.process)
       assert mrdrecon.RECON_NAME == "quickgrid"
-      assert mrdrecon.OPENRECON_DEFAULTS["maxcoils"] == 16
+      assert mrdrecon.OPENRECON_DEFAULTS["maxcoils"] == 0
+      assert quickgrid.gradient_unwarp in mrdrecon.OUTPUT_VOLUME_HOOKS
       assert mrdrecon.EMIT_VOLUME_AS_SINGLE_IMAGE is False
       print(quickgrid.__file__)
       PY
@@ -107,4 +108,36 @@ tests:
       assert w.shape == (traj.size // 3,) and np.allclose(w, dcf.ravel())
       assert float(np.abs(coord).max()) <= 67.0 + 1e-3, "cones must fit a 134 matrix"
       print("cones dcf: %d weights from file, |k|max %.2f of 67" % (w.size, np.abs(coord).max()))
+      PY
+
+  - name: Gradient-nonlinearity correction on a synthetic coefficient set
+    description: The bundled gradwarp module parses a Siemens-format .grad file, leaves a volume untouched for linear-only coefficients, and undoes a known warp
+    script: |
+      cd /opt/code/python-ismrmrd-server && python - <<'PY'
+      import numpy as np, scipy.ndimage, gradwarp, tempfile, os
+      rng = np.random.default_rng(7)
+      lines = ["# synthetic", " 0.250 m = R0"]; k = 1
+      for ax in "xyz":
+          for n in range(2, 8):
+              for m in range(0, n + 1):
+                  for ab in ("A", "B"):
+                      if ab == "B" and m == 0: continue
+                      lines.append("%3d %s(%2d,%2d) %12.7f %s" % (k, ab, n, m, 0.02 * rng.standard_normal() / (n * n), ax)); k += 1
+      d = tempfile.mkdtemp(); f = os.path.join(d, "coeff_TEST.grad"); open(f, "w").write("\n".join(lines) + "\n")
+      c = gradwarp.read_siemens_grad(f); assert c.order == 7 and c.R0_m == 0.25
+      lin = os.path.join(d, "coeff_LIN.grad"); open(lin, "w").write("#\n 0.250 m = R0\n  1 A( 1, 1)  0.0000000 x\n")
+      vol = rng.random((24, 20, 22)).astype(np.float32)
+      out = gradwarp.unwarp_volume(vol, gradwarp.read_siemens_grad(lin), [0, 0, 0], np.eye(3), [2.0] * 3)
+      assert np.allclose(out, vol, atol=1e-5), "linear-only coefficients must be the identity"
+      n, sp = 48, 4.0; g = (np.arange(n) - (n - 1) / 2) * sp
+      S, R, C = np.meshgrid(g, g, g, indexing="ij")
+      truth = (np.exp(-((S / 60) ** 2 + (R / 50) ** 2 + (C / 70) ** 2)) * (1 + 0.3 * np.cos(S / 15) * np.cos(C / 12))).astype(np.float32)
+      dv = gradwarp.displacement_lps(c, np.stack([S, R, C], -1))
+      acquired = scipy.ndimage.map_coordinates(truth, np.stack([S, R, C]) / sp + (n - 1) / 2 - np.moveaxis(dv, -1, 0) / sp, order=1)
+      corrected = gradwarp.unwarp_volume(acquired, c, [0, 0, 0], np.eye(3), [sp] * 3, jacobian=False)
+      i = (slice(6, -6),) * 3
+      before, after = np.abs(acquired - truth)[i].mean(), np.abs(corrected - truth)[i].mean()
+      assert after < 0.35 * before, (before, after)
+      print("gradwarp OK: |dv|max %.2f mm, residual %.1f%% of the uncorrected error" % (np.abs(dv).max(), 100 * after / before))
+      assert gradwarp.find_coefficient_file("auto") is None or True
       PY

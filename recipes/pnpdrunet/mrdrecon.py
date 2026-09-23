@@ -1320,6 +1320,38 @@ def _resolve_orientation_config(config):
     return orientation, emit_debug_series
 
 
+# Optional volume post-processing supplied by the app module. Each hook is
+# called as hook(volume, context) after the algorithm output (and N4) and
+# before display scaling, orientation and emission, and returns the volume.
+# `context` carries reference_head, metadata, params, output_fov_mm,
+# orientation and flip_slice. An app that needs patient-space geometry can
+# call to_acquisition_frame()/from_acquisition_frame() to work in the frame
+# whose axes are slice_dir, phase_dir and read_dir with the header's centre.
+OUTPUT_VOLUME_HOOKS = []
+
+
+def to_acquisition_frame(volume, orientation, flip_slice=False):
+    """(slices, rows, columns) along slice_dir, phase_dir, read_dir; returns (volume, key)."""
+    return _orient_volume(volume, orientation, flip_slice)
+
+
+def from_acquisition_frame(volume, orientation_key, flip_slice=False):
+    """Inverse of to_acquisition_frame for the same key (all steps are involutions)."""
+    transpose_in_plane, reverse_rows, reverse_columns = (
+        ORIENTATION_IN_PLANE_TRANSFORMS[orientation_key]
+    )
+    oriented = np.asarray(volume)
+    if flip_slice:
+        oriented = oriented[::-1, :, :]
+    if reverse_columns:
+        oriented = oriented[:, :, ::-1]
+    if reverse_rows:
+        oriented = oriented[:, ::-1, :]
+    if transpose_in_plane:
+        oriented = oriented.transpose(0, 2, 1)
+    return np.ascontiguousarray(oriented)
+
+
 def _orient_volume(volume, orientation, flip_slice=False):
     """Map trajectory components into acquisition (slice, phase, read) axes."""
     key = _resolve_orientation(orientation)
@@ -2249,9 +2281,19 @@ def process_raw(group, connection, config, metadata, reconstruct):
         volume = _n4_bias_field_correct(volume)
         logging.info("Finished N4 bias field correction")
 
+    orientation, orientation_debug_series = _resolve_orientation_config(config)
+    for hook in OUTPUT_VOLUME_HOOKS:
+        volume = np.asarray(
+            hook(volume, dict(reference_head=reference_head, metadata=metadata, params=params,
+                              output_fov_mm=float(params["fovcm"]) * 10.0,
+                              orientation=orientation, flip_slice=params["orientationflipslice"])),
+            dtype=np.float32)
+        if volume.shape != recon.image_shape:
+            raise ValueError(f"output hook {hook!r} changed the volume shape to {volume.shape}")
+        _log_volume_statistics(f"after {getattr(hook, '__name__', 'hook')}", volume)
+
     recon.save_debug("output_volume", volume)
 
-    orientation, orientation_debug_series = _resolve_orientation_config(config)
     message = f"{RECON_NAME} processing time: {(perf_counter() - tic) * 1000.0:.2f} ms"
     logging.info(message)
     connection.send_logging(constants.MRD_LOGGING_INFO, message)

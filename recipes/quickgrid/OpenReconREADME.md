@@ -27,6 +27,18 @@ Bundled trajectories (`trajectoryfile: auto` picks by acquired shape):
 Trajectories in `fire\share` (mounted as `/tmp/share`) are also candidates for
 `auto`, matched by `(samples, readouts)`, so a new one only has to be copied there.
 
+Gradient-nonlinearity (distortion) correction is applied in the recon
+(`gradunwarp`: off / 3D / 3Dnojac / 2D, default 3D), because images injected by
+FIRE under IceProgramStandard enter the chain after ICE's DistorCor functor. It
+needs the scanner's Siemens coefficient file, which is proprietary and **not
+bundled**: copy `coeff_IMPULSE.grad` into `fire\share` (or the directory
+mounted as /tmp/share on the remote recon server), or point `gradcoeffile` at
+it. Without the file the recon logs a warning and emits uncorrected images.
+The maths follows gradunwarp (HCP, MIT): spherical-harmonic displacement field
+times R0, trilinear resampling of the volume at p + dv(p), Jacobian intensity
+factor capped at 10. Images remain tagged ND on the scanner (ICE did not
+correct them); `DistorCorMode` stays ND in the XML.
+
 Coils are gridded in parallel processes (`maxworkers`, default 8), capped by
 the CPUs and memory the container is given. The result does not depend on the
 worker count. Sum-of-squares combination is streamed, so the full stack of coil

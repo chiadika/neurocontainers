@@ -65,8 +65,8 @@
      "default": "SoS", "information": {"en": "Sum of squares is the safe default; adaptive combine estimates sensitivities from the coil images."}},
     {"id": "applyfermifilter", "label": {"en": "Fermi filter"}, "type": "boolean", "default": false,
      "information": {"en": "Apodise k-space before gridding to reduce ringing."}},
-    {"id": "maxcoils", "label": {"en": "Max coils"}, "type": "int", "minimum": 0, "maximum": 64, "default": 16,
-     "information": {"en": "Reconstruct at most this many channels. 0 uses all of them."}},
+    {"id": "maxcoils", "label": {"en": "Max coils"}, "type": "int", "minimum": 0, "maximum": 64, "default": 0,
+     "information": {"en": "0 uses every receive channel (then PCA coil compression). A positive value keeps only the first N physical channels."}},
     {"id": "maxworkers", "label": {"en": "Gridding processes"}, "type": "int", "minimum": 1, "maximum": 32, "default": 8,
      "information": {"en": "Coils are gridded in parallel processes. Capped automatically by the CPUs and memory the container is given; the result does not depend on it."}},
     {"id": "orientation", "label": {"en": "Orientation"}, "type": "choice",
@@ -75,6 +75,13 @@
                 {"id": "debug", "name": {"en": "debug"}}],
      "default": "zyx", "information": {"en": "Mapping from trajectory components to acquisition axes. 'debug' emits every mapping as a separate series."}},
     {"id": "orientationflipslice", "label": {"en": "Flip slice order"}, "type": "boolean", "default": false,
-     "information": {"en": "Reverse the through-plane order before the display-frame canonicalisation."}}
+     "information": {"en": "Reverse the through-plane order before the display-frame canonicalisation."}},
+    {"id": "gradunwarp", "label": {"en": "Distortion correction"}, "type": "choice",
+     "values": [{"id": "off", "name": {"en": "Off"}}, {"id": "3D", "name": {"en": "3D with intensity correction"}},
+                {"id": "3Dnojac", "name": {"en": "3D, geometry only"}}, {"id": "2D", "name": {"en": "2D in-plane (like DistorCor2D)"}}],
+     "default": "3D",
+     "information": {"en": "Gradient-nonlinearity correction applied in the recon (ICE's own functor cannot reach injected images). Needs the coefficient file; skipped with a warning when it is missing."}},
+    {"id": "gradcoeffile", "label": {"en": "Gradient coefficient file"}, "type": "string", "default": "auto",
+     "information": {"en": "Siemens coeff_<coil>.grad. 'auto' searches /opt/quickgrid and /tmp/share (fire\\share). Not bundled: copy coeff_IMPULSE.grad into fire\\share."}}
   ]
 }

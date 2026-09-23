@@ -57,3 +57,5 @@ recipes/openmsk/out_direct
 # scanner log dumps
 recipes/logs/
 recipes/cocos_logs/
+recipes/_localtest/recon25k.nii.npy
+recipes/9_9_2026_mars_debugging_outputs.txt

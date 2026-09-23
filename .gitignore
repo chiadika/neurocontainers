@@ -53,3 +53,7 @@ httpcache/
 recipes/openmsk/nnunet_cache/
 recipes/openmsk/out_seg
 recipes/openmsk/out_direct
+
+# scanner log dumps
+recipes/logs/
+recipes/cocos_logs/

@@ -56,6 +56,17 @@ times R0, trilinear resampling of the volume at p + dv(p), Jacobian intensity
 factor capped at 10. Images remain tagged ND on the scanner (ICE did not
 correct them); `DistorCorMode` stays ND in the XML.
 
+Intensity normalisation (1.2.3): `coilcombinemode` `SoSnorm` divides the
+sum-of-squares image by its own low-resolution envelope (centre of k-space,
+`normfraction` 0.125 of kmax, Gaussian-smoothed, regularised division), which
+removes every smooth multiplicative shading, receive and transmit alike, so use
+it for display only. `SoSvbc` divides by the array's sensitivity relative to
+the first principal virtual coil, a near-uniform combination of all elements
+standing in for the missing body coil: the self-calibrated analogue of the
+product's Prescan Normalize. Transmit shading is common to both and stays, so
+the image remains proportional to the transmit field, which is what a
+B1+-corrected quantitative pipeline wants. Neither replaces a measured B1+ map.
+
 Coils are gridded in parallel processes (`maxworkers`, default 8), capped by
 the CPUs and memory the container is given. The result does not depend on the
 worker count. Sum-of-squares combination is streamed, so the full stack of coil

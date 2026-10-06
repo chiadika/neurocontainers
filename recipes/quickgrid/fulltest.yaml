@@ -2,7 +2,7 @@
 # reconstruction through a real trajectory, and the cones DCF path.
 
 name: quickgrid
-version: 1.2.2
+version: 1.2.3
 default_timeout: 600
 
 test_data:

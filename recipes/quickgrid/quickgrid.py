@@ -83,7 +83,8 @@ DEFAULTS = {
     "trajectorydataset": "k",
     "dcfmode": "auto",          # file -> analytic -> pipe
     "dcfiterations": 10,        # only if Pipe-Menon has to run at recon time
-    "coilcombinemode": "SoS",   # SoS or AC (adaptive combine)
+    "coilcombinemode": "SoS",   # SoS, SoSnorm, SoSvbc or AC (adaptive combine)
+    "normfraction": 0.125,      # |k| fraction of kmax used for the receive reference (SoSnorm / SoSvbc)
     "applyfermifilter": False,  # k-space apodisation before gridding
     "fermiwidth": 0.05,
     "fermicutoff": 0.98,
@@ -295,6 +296,52 @@ def combine(coil_images, mode):
     return np.abs(mrdrecon.combine_coils(coil_images, mode=mode)).astype(np.float32)
 
 
+def receive_reference(kspace, coord, weights, matrix, fraction=0.125, workers=1):
+    """Low-resolution references from the centre of k-space, the self-calibrated
+    analogue of the scanner's Prescan Normalize (there is no body coil at 7 T).
+
+    Points with |k| <= fraction * kmax are gridded per coil onto a small matrix.
+    Returns (sos_lr, vbc_lr): the root-sum-of-squares image and the magnitude of
+    the first principal virtual coil, a near-uniform combination of all elements
+    that stands in for a volume-coil reference. Both are (M, M, M) float32.
+    """
+    y = kspace.reshape(kspace.shape[0], -1)
+    coord = np.asarray(coord, dtype=np.float32)
+    radius = float(np.sqrt((coord ** 2).sum(axis=1)).max())
+    keep = np.sqrt((coord ** 2).sum(axis=1)) <= fraction * radius
+    m = max(16, int(np.ceil(2.0 * fraction * radius)) + 2)
+    scale = m / float(matrix)
+    coil_lr = grid(y[:, keep], coord[keep] * scale, np.asarray(weights, dtype=np.float32)[keep],
+                   (m, m, m), workers=workers, mode="collect")
+    flat = coil_lr.reshape(coil_lr.shape[0], -1)
+    _, _, vh = np.linalg.svd(flat, full_matrices=False)
+    vbc = np.abs(vh[0]).reshape(m, m, m)                  # first principal virtual coil
+    sos = np.sqrt(np.sum(np.abs(flat) ** 2, axis=0)).reshape(m, m, m)
+    logging.info("quickgrid: receive reference from %d of %d k-space points (|k| <= %.3f kmax) on a %d^3 grid",
+                 int(keep.sum()), int(keep.size), fraction, m)
+    return sos.astype(np.float32), vbc.astype(np.float32)
+
+
+def normalise_by_envelope(volume, envelope_lr, floor=0.05):
+    """Divide `volume` by a smooth envelope given at low resolution.
+
+    The envelope is Gaussian-smoothed, trilinearly resampled to the volume's
+    grid and applied as a regularised division env / (env^2 + (floor*max)^2),
+    so empty regions are not amplified. Scaled to keep the volume's maximum.
+    """
+    import scipy.ndimage
+    env = scipy.ndimage.gaussian_filter(np.asarray(envelope_lr, dtype=np.float32), 1.0)
+    zoom = [n / float(e) for n, e in zip(volume.shape, env.shape)]
+    env = scipy.ndimage.zoom(env, zoom, order=1)
+    env = env[tuple(slice(0, n) for n in volume.shape)]
+    eps = floor * float(env.max())
+    out = volume * env / (env ** 2 + eps ** 2)
+    peak = float(volume.max())
+    if out.max() > 0:
+        out *= peak / float(out.max())
+    return out.astype(np.float32)
+
+
 # ---------------------------------------------------------------------------
 # The reconstruction
 # ---------------------------------------------------------------------------
@@ -312,11 +359,25 @@ def reconstruct(recon):
     weights = density_compensation(recon, coord)
     mode = str(recon.config.get("coilcombinemode", "SoS")).strip()
     workers = worker_count(recon.config.get("maxworkers", 1), recon.num_coils, recon.image_shape)
-    if mode.lower() == "sos":
+    if mode.lower() in ("sos", "sosnorm", "sosvbc"):
         # streaming: each task returns sum|img|^2 for its coil, so the full
         # (coils, N, N, N) stack is never materialised
-        sos = grid(recon.kspace, coord, weights, recon.image_shape, workers=workers, mode="sos")
-        return np.sqrt(sos).astype(np.float32)
+        sos = np.sqrt(grid(recon.kspace, coord, weights, recon.image_shape, workers=workers, mode="sos")).astype(np.float32)
+        if mode.lower() == "sos":
+            return sos
+        fraction = float(recon.config.get("normfraction", DEFAULTS["normfraction"]))
+        sos_lr, vbc_lr = receive_reference(recon.kspace, coord, weights, recon.matrix_size, fraction, workers)
+        if mode.lower() == "sosnorm":
+            # divide by the image's own smooth envelope: removes every smooth
+            # multiplicative shading, receive and transmit alike (display use)
+            envelope = sos_lr
+        else:
+            # divide by the array sensitivity relative to the virtual body coil:
+            # transmit shading is common to both and stays (receive-only, like
+            # the product's Prescan Normalize at 7 T)
+            envelope = sos_lr / np.maximum(vbc_lr, 1e-6 * float(vbc_lr.max()))
+        recon.save_debug("receive_reference", np.stack([sos_lr, vbc_lr]))
+        return normalise_by_envelope(sos, envelope)
     coil_images = grid(recon.kspace, coord, weights, recon.image_shape, workers=workers)
     volume = combine(coil_images, mode)
     recon.save_debug("coil_images", coil_images)

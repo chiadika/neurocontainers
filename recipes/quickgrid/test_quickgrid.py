@@ -236,3 +236,29 @@ def test_orientation_keys_permute_components_and_round_trip(monkeypatch):
     choices = {v["id"] for p in label["parameters"] if p["id"] == "orientation" for v in p["values"]}
     assert choices - {"debug"} <= set(mr.ORIENTATION_TRANSFORMS)
     assert "xyz" in choices
+
+
+def test_normalised_combination_flattens_a_receive_ramp(monkeypatch):
+    """SoSnorm/SoSvbc divide a smooth coil-sensitivity ramp out of the image;
+    plain SoS keeps it. The ramp is the only thing that differs between coils."""
+    m = _import_quickgrid(monkeypatch)
+    N, fov = 24, 22.0
+    traj = _radial_trajectory(samples=12, spokes=900, kmax=0.5)
+    coord = traj.reshape(-1, 3) * fov
+    # uniform ball, two coils whose sensitivities ramp in opposite directions
+    x = np.arange(N) - N / 2 + 0.5
+    X, Y, Z = np.meshgrid(x, x, x, indexing="ij")
+    ball = ((X ** 2 + Y ** 2 + Z ** 2) <= (0.35 * N) ** 2).astype(np.complex64)
+    ramps = [1.0 + 0.8 * (X / N), 1.0 - 0.8 * (X / N)]
+    kspace = np.stack([m.sigpy.nufft((ball * r).astype(np.complex64), coord) for r in ramps])
+    kspace = kspace.reshape(2, traj.shape[0], traj.shape[1]).astype(np.complex64)
+    out = {}
+    for mode in ("SoS", "SoSnorm", "SoSvbc"):
+        vol = m.reconstruct(_recon_input(m, traj, kspace, N, fov, coilcombinemode=mode, dcfmode="analytic"))
+        assert vol.shape == (N, N, N) and np.isfinite(vol).all()
+        inside = ball.real > 0
+        left = vol[:N // 2][inside[:N // 2]].mean(); right = vol[N // 2:][inside[N // 2:]].mean()
+        out[mode] = abs(left - right) / (0.5 * (left + right))
+    # SoS of two opposite ramps is itself curved across the ball; the normalised
+    # modes must be flatter than SoS and flat to within a few percent
+    assert out["SoSnorm"] < 0.05 and out["SoSvbc"] < 0.5 * out["SoS"] + 0.05, out

@@ -144,17 +144,29 @@ LAST_TRAJECTORY_SOURCE = None
 # component 0). Which trajectory component maps to the acquisition's read and
 # phase axes is not encoded by the trajectory file. The orientation setting
 # selects that mapping and any component-sign corrections.
-ORIENTATION_IN_PLANE_TRANSFORMS = {
-    # key: (transpose_in_plane, reverse_rows, reverse_columns)
-    "zyx": (False, False, False),
-    "zyx_fx": (False, False, True),
-    "zyx_fy": (False, True, False),
-    "zyx_fxy": (False, True, True),
-    "zxy": (True, False, False),
-    "zxy_fx": (True, False, True),
-    "zxy_fy": (True, True, False),
-    "zxy_fxy": (True, True, True),
+# key: (source axes of (slices, rows, columns) in the gridded (z, y, x) volume,
+#       reverse_rows, reverse_columns). The letters name the trajectory component
+# that lands on slices, rows and columns, in that order: 'zyx' keeps the gridded
+# order, 'zxy' swaps the in-plane axes, 'xyz' puts component 0 through-plane and
+# component 2 along the columns. '_fx' reverses the columns, '_fy' the rows,
+# '_fxy' both; 'orientationflipslice' reverses the slices.
+#
+# 'xyz' is what the Pulseq interpreter on the Terra.X (SEQ_ARBITRARY_v151,
+# measured 2026-10-05 with an eraser at the left ear and the fill plug at the
+# vertex of a head phantom) needs: the header reports a transversal frame
+# (read L->R, phase A->P, slice F->H) while the sequence's x gradient runs F->H
+# and its z gradient runs L->R, so components 0 and 2 have to be swapped.
+_GRIDDED_AXIS_OF_COMPONENT = {"z": 0, "y": 1, "x": 2}
+ORIENTATION_TRANSFORMS = {
+    f"{letters}{suffix}": (
+        tuple(_GRIDDED_AXIS_OF_COMPONENT[letter] for letter in letters),
+        "y" in suffix,
+        "x" in suffix,
+    )
+    for letters in ("zyx", "zxy", "xyz", "xzy", "yxz", "yzx")
+    for suffix in ("", "_fx", "_fy", "_fxy")
 }
+ORIENTATION_IN_PLANE_TRANSFORMS = ORIENTATION_TRANSFORMS  # older name, same table
 # Trajectory component 1 runs opposite to the acquisition's phase_dir, so the
 # rows have to be reversed to make the gridded pixels match the header. Measured
 # on the scanner from the 0.1.5 run: with 'zyx' the anterior-posterior axis is
@@ -172,7 +184,9 @@ ORIENTATION_IN_PLANE_TRANSFORMS = {
 # reveal it. Only the row sign is corrected here.
 DEFAULT_ORIENTATION = "zyx_fy"
 ORIENTATION_DEBUG_SELECTION = "debug"
-ORIENTATION_DEBUG_ORDER = tuple(ORIENTATION_IN_PLANE_TRANSFORMS)
+ORIENTATION_DEBUG_ORDER = tuple(
+    key for key in ORIENTATION_TRANSFORMS if key[:3] in ("zyx", "zxy", "xyz")
+)
 #
 # ISMRMRD direction vectors are in the DICOM/Siemens patient coordinate system
 # (+x left, +y posterior, +z head). Labels below are (negative, positive).
@@ -1284,12 +1298,12 @@ def _frame_position(center_position, slice_dir, frame_index, slice_count, slice_
 
 def _resolve_orientation(orientation):
     key = str(orientation).strip().lower()
-    if key not in ORIENTATION_IN_PLANE_TRANSFORMS:
+    if key not in ORIENTATION_TRANSFORMS:
         logging.warning(
             "Unknown orientation '%s'; falling back to '%s'. Valid values: %s",
             orientation,
             DEFAULT_ORIENTATION,
-            ", ".join(sorted(ORIENTATION_IN_PLANE_TRANSFORMS)),
+            ", ".join(sorted(ORIENTATION_TRANSFORMS)),
         )
         key = DEFAULT_ORIENTATION
     return key
@@ -1336,10 +1350,8 @@ def to_acquisition_frame(volume, orientation, flip_slice=False):
 
 
 def from_acquisition_frame(volume, orientation_key, flip_slice=False):
-    """Inverse of to_acquisition_frame for the same key (all steps are involutions)."""
-    transpose_in_plane, reverse_rows, reverse_columns = (
-        ORIENTATION_IN_PLANE_TRANSFORMS[orientation_key]
-    )
+    """Inverse of to_acquisition_frame for the same key."""
+    permutation, reverse_rows, reverse_columns = ORIENTATION_TRANSFORMS[orientation_key]
     oriented = np.asarray(volume)
     if flip_slice:
         oriented = oriented[::-1, :, :]
@@ -1347,21 +1359,16 @@ def from_acquisition_frame(volume, orientation_key, flip_slice=False):
         oriented = oriented[:, :, ::-1]
     if reverse_rows:
         oriented = oriented[:, ::-1, :]
-    if transpose_in_plane:
-        oriented = oriented.transpose(0, 2, 1)
+    oriented = oriented.transpose(*np.argsort(permutation))
     return np.ascontiguousarray(oriented)
 
 
 def _orient_volume(volume, orientation, flip_slice=False):
     """Map trajectory components into acquisition (slice, phase, read) axes."""
     key = _resolve_orientation(orientation)
-    transpose_in_plane, reverse_rows, reverse_columns = (
-        ORIENTATION_IN_PLANE_TRANSFORMS[key]
-    )
+    permutation, reverse_rows, reverse_columns = ORIENTATION_TRANSFORMS[key]
 
-    oriented = np.asarray(volume)
-    if transpose_in_plane:
-        oriented = oriented.transpose(0, 2, 1)
+    oriented = np.asarray(volume).transpose(*permutation)
     if reverse_rows:
         oriented = oriented[:, ::-1, :]
     if reverse_columns:
@@ -1709,14 +1716,12 @@ def _log_reference_geometry(reference_head, metadata):
 
 
 def _log_acquisition_axes(packed_shape, reference_head, orientation_key, flip_slice):
-    transpose_in_plane, reverse_rows, reverse_columns = (
-        ORIENTATION_IN_PLANE_TRANSFORMS[orientation_key]
-    )
+    permutation, reverse_rows, reverse_columns = ORIENTATION_TRANSFORMS[orientation_key]
     logging.info(
-        "Trajectory orientation '%s': transpose_in_plane=%s reverse_rows=%s "
-        "reverse_columns=%s reverse_slices=%s",
+        "Trajectory orientation '%s': (slices, rows, columns) from trajectory "
+        "components %s, reverse_rows=%s reverse_columns=%s reverse_slices=%s",
         orientation_key,
-        transpose_in_plane,
+        tuple(2 - axis for axis in permutation),
         reverse_rows,
         reverse_columns,
         flip_slice,

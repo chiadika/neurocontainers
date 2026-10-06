@@ -209,3 +209,30 @@ def test_auto_selection_also_searches_the_share_folder(monkeypatch, tmp_path):
         def __init__(self): self.data = np.zeros((1, 10), np.complex64)
     picked = m.mrdrecon._autoselect_trajectory([Acq() for _ in range(77)], "k")
     assert picked == str(tmp_path / "mine_trajectory.h5")
+
+
+def test_orientation_keys_permute_components_and_round_trip(monkeypatch):
+    """Every orientation key places the named trajectory components on
+    (slices, rows, columns) and from_acquisition_frame undoes it exactly."""
+    m = _import_quickgrid(monkeypatch)
+    mr = m.mrdrecon
+    rng = np.random.default_rng(0)
+    vol = rng.random((3, 4, 5)).astype(np.float32)          # gridded (z, y, x)
+    axis_of = {"z": 0, "y": 1, "x": 2}
+    for key in mr.ORIENTATION_TRANSFORMS:
+        for flip_slice in (False, True):
+            packed, used = mr.to_acquisition_frame(vol, key, flip_slice)
+            assert used == key
+            letters, suffix = key[:3], key[3:]
+            assert packed.shape == tuple(vol.shape[axis_of[c]] for c in letters)
+            restored = mr.from_acquisition_frame(packed, used, flip_slice)
+            assert np.array_equal(restored, vol), key
+    # 'xyz': component 0 (gridded axis 2) becomes the slice axis, component 2 the columns
+    packed, _ = mr.to_acquisition_frame(vol, "xyz")
+    assert np.array_equal(packed, vol.transpose(2, 1, 0))
+    packed, _ = mr.to_acquisition_frame(vol, "xyz_fx")
+    assert np.array_equal(packed, vol.transpose(2, 1, 0)[:, :, ::-1])
+    label = json.loads((RECIPE_DIR / "OpenReconLabel.json").read_text())
+    choices = {v["id"] for p in label["parameters"] if p["id"] == "orientation" for v in p["values"]}
+    assert choices - {"debug"} <= set(mr.ORIENTATION_TRANSFORMS)
+    assert "xyz" in choices

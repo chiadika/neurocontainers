@@ -2,7 +2,7 @@
 # reconstruction through a real trajectory, and the cones DCF path.
 
 name: quickgrid
-version: 1.2.0
+version: 1.2.2
 default_timeout: 600
 
 test_data:
@@ -42,6 +42,13 @@ tests:
       choices = {v["id"] for p in label["parameters"] if p["id"] == "trajectoryfile" for v in p["values"]}
       assert set(quickgrid.BUNDLED_TRAJECTORIES.values()) <= choices, choices
       print("label OK:", len(label["parameters"]), "parameters")
+      for key, path in quickgrid.NAMED_TRAJECTORIES.items():      # bundled, selectable by name, excluded from auto
+          with h5py.File(path, "r") as h:
+              assert "dcf" in h and "acq_order" in h and h["dcf"].shape == h["k"].shape[:2], key
+              order = h["acq_order"][...].ravel()
+              assert len(set(order.tolist())) == h["k"].shape[1], "acq_order must be a permutation"
+              print("  %-24s k%s  +dcf +acq_order (named only)" % (key, h["k"].shape))
+          assert path in choices, path
       PY
 
   - name: Modules import and framework is configured

@@ -59,3 +59,9 @@ recipes/logs/
 recipes/cocos_logs/
 recipes/_localtest/recon25k.nii.npy
 recipes/9_9_2026_mars_debugging_outputs.txt
+
+# scanner-side pulls (server log + emitted volume) and bench photos
+recipes/recon-server-debug/
+recipes/scanner_orientation_imgs/
+# rsync temporaries of raw TWIX transfers
+recipes/.*.dat.*

@@ -23,6 +23,23 @@ Bundled trajectories (`trajectoryfile: auto` picks by acquired shape):
 
 | cones3d_n206435 | (317, 206435), analytic dcf | **512**, fovcm 25.0 |
 | cones3d_n412489 | (317, 412489), analytic dcf | **512**, fovcm 25.0 |
+| cones3d_n34506_ir32 (select by name) | (312, 34506), Pipe dcf, random order | **278**, fovcm 25.0 |
+
+`cones3d_n34506_ir32` serves every `…_sp2_ir32_*` IR-prepared sequence: same
+readouts as `cones3d_n34506` in a seeded random acquisition order, with the DCF
+rows permuted to match and the permutation stored as `acq_order`. It has the
+same shape as the plain n34506 file, so `auto` cannot pick it: set
+`trajectoryfile` to `/opt/quickgrid/cones3d_n34506_ir32_trajectory.h5` for IR
+scans and back to `auto` afterwards.
+
+Orientation (`orientation`, default `xyz` since 1.2.2): the three letters name
+the trajectory components placed on (slices, rows, columns); `_fx`/`_fy`
+reverse columns/rows and `orientationflipslice` the slices. On the Terra.X the
+Pulseq interpreter reports a transversal frame but plays the sequence's x
+gradient along F-H and its z gradient along L-R, so `xyz` is needed; `zyx` (the
+pre-1.2.2 default) shows sagittal content in transversal frames. Verified with
+an eraser at the left ear and the fill plug at the vertex of a head phantom.
+Set `"orientation": "xyz"` in `wip_070_fire_quickgrid.json` as well.
 
 Trajectories in `fire\share` (mounted as `/tmp/share`) are also candidates for
 `auto`, matched by `(samples, readouts)`, so a new one only has to be copied there.

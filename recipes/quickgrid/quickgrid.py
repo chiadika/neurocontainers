@@ -63,6 +63,16 @@ BUNDLED_TRAJECTORIES = {
 # not baked in only has to be copied there. Entries here just name them in the UI.
 SHARE_TRAJECTORIES = {}
 
+# Bundled but deliberately kept out of `auto`: these have the same
+# (samples, readouts) as a BUNDLED_TRAJECTORIES entry and differ only in
+# readout order, so `auto` could not tell them apart. Select them by name.
+NAMED_TRAJECTORIES = {
+    # IR-prepared 256^3 cones (…_sp2_ir32_*.seq): same readouts as cones3d_n34506
+    # in a seeded random acquisition order; rows permuted, Pipe DCF permuted,
+    # `acq_order` dataset records the permutation. matrix 278, fovcm 25.0.
+    "cones3d_n34506_ir32": f"/opt/{RECON_NAME}/cones3d_n34506_ir32_trajectory.h5",
+}
+
 # Keep these in step with OpenReconLabel.json (which is what the scanner JSON
 # config is generated from). Anything not listed there can still be set here.
 DEFAULTS = {
@@ -83,7 +93,7 @@ DEFAULTS = {
     "maxcoils": 0,              # 0 = all physical coils (then PCA compression); >0 keeps the first N
     "maxworkers": 8,            # coil-parallel gridding processes (capped by CPUs and memory)
     "applyn4biascorrection": False,
-    "orientation": "zyx",
+    "orientation": "xyz",
     "orientationflipslice": False,
     "gradunwarp": "3D",         # off | 3D | 3Dnojac | 2D  (gradient-nonlinearity correction)
     "gradcoeffile": "auto",     # Siemens coeff_<coil>.grad: 'auto' searches /opt/quickgrid and /tmp/share

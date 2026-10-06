@@ -45,7 +45,8 @@
        {"id": "/opt/quickgrid/cones3d_n68785_trajectory.h5", "name": {"en": "cones 256^3 250 mm TE50 R=1 (68785 readouts, matrix 266, FOV 25.0)"}},
        {"id": "/opt/quickgrid/cones3d_n34506_trajectory.h5", "name": {"en": "cones 256^3 250 mm TE50 R=2 (34506 readouts, matrix 278, FOV 25.0)"}},
        {"id": "/opt/quickgrid/cones3d_n206435_trajectory.h5", "name": {"en": "cones 512^3 250 mm TR2 R=4 (206435 readouts, matrix 512, FOV 25.0)"}},
-       {"id": "/opt/quickgrid/cones3d_n412489_trajectory.h5", "name": {"en": "cones 512^3 250 mm TR2 R=2 (412489 readouts, matrix 512, FOV 25.0)"}}
+       {"id": "/opt/quickgrid/cones3d_n412489_trajectory.h5", "name": {"en": "cones 512^3 250 mm TR2 R=2 (412489 readouts, matrix 512, FOV 25.0)"}},
+       {"id": "/opt/quickgrid/cones3d_n34506_ir32_trajectory.h5", "name": {"en": "cones 256^3 IR-prepared, random order (34506 readouts, matrix 278, FOV 25.0) - select by name, not auto"}}
      ], "default": "auto",
      "information": {"en": "Auto matches (samples, readouts) against the bundled trajectories and any *_trajectory.h5 in fire\\share, and refuses a mismatch. Cones trajectories carry a precomputed DCF; matrixsize must equal the label extent named here."}},
     {"id": "matrixsize", "label": {"en": "Matrix size"}, "type": "int", "minimum": 16, "maximum": 1024, "default": 128,
@@ -72,8 +73,10 @@
     {"id": "orientation", "label": {"en": "Orientation"}, "type": "choice",
      "values": [{"id": "zyx", "name": {"en": "zyx"}}, {"id": "zyx_fx", "name": {"en": "zyx_fx"}}, {"id": "zyx_fy", "name": {"en": "zyx_fy"}}, {"id": "zyx_fxy", "name": {"en": "zyx_fxy"}},
                 {"id": "zxy", "name": {"en": "zxy"}}, {"id": "zxy_fx", "name": {"en": "zxy_fx"}}, {"id": "zxy_fy", "name": {"en": "zxy_fy"}}, {"id": "zxy_fxy", "name": {"en": "zxy_fxy"}},
+                {"id": "xyz", "name": {"en": "xyz"}}, {"id": "xyz_fx", "name": {"en": "xyz_fx"}}, {"id": "xyz_fy", "name": {"en": "xyz_fy"}}, {"id": "xyz_fxy", "name": {"en": "xyz_fxy"}},
+                {"id": "xzy", "name": {"en": "xzy"}}, {"id": "xzy_fx", "name": {"en": "xzy_fx"}}, {"id": "xzy_fy", "name": {"en": "xzy_fy"}}, {"id": "xzy_fxy", "name": {"en": "xzy_fxy"}},
                 {"id": "debug", "name": {"en": "debug"}}],
-     "default": "zyx", "information": {"en": "Mapping from trajectory components to acquisition axes. 'debug' emits every mapping as a separate series."}},
+     "default": "xyz", "information": {"en": "Trajectory components placed on (slices, rows, columns); _fx/_fy reverse columns/rows. 'xyz' is right for the Terra.X Pulseq interpreter (x gradient runs F->H, z runs L->R). 'debug' emits every mapping as a separate series."}},
     {"id": "orientationflipslice", "label": {"en": "Flip slice order"}, "type": "boolean", "default": false,
      "information": {"en": "Reverse the through-plane order before the display-frame canonicalisation."}},
     {"id": "gradunwarp", "label": {"en": "Distortion correction"}, "type": "choice",

@@ -1,5 +1,5 @@
 name: quickgrid
-version: 1.2.0
+version: 1.2.2
 
 copyright:
   - license: MIT
@@ -45,6 +45,8 @@ files:
     url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/cones3d_n206435_trajectory.h5
   - name: cones3d_n412489
     url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/cones3d_n412489_trajectory.h5
+  - name: cones3d_n34506_ir32
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/cones3d_n34506_ir32_trajectory.h5
 
 build:
   kind: neurodocker
@@ -87,6 +89,7 @@ build:
         - cp {{ get_file("cones3d_n34506") }} /opt/quickgrid/cones3d_n34506_trajectory.h5
         - cp {{ get_file("cones3d_n206435") }} /opt/quickgrid/cones3d_n206435_trajectory.h5
         - cp {{ get_file("cones3d_n412489") }} /opt/quickgrid/cones3d_n412489_trajectory.h5
+        - cp {{ get_file("cones3d_n34506_ir32") }} /opt/quickgrid/cones3d_n34506_ir32_trajectory.h5
 
 deploy:
   bins:

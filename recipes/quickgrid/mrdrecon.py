@@ -139,23 +139,25 @@ LAST_TRAJECTORY_SOURCE = None
 
 # Trajectory-to-acquisition orientation is the first geometry stage.
 #
-# The gridding kernel writes grid[iz, iy, ix] with ix taken from trajectory
-# component 0, so the reconstructed volume is (component 2, component 1,
-# component 0). Which trajectory component maps to the acquisition's read and
-# phase axes is not encoded by the trajectory file. The orientation setting
-# selects that mapping and any component-sign corrections.
-# key: (source axes of (slices, rows, columns) in the gridded (z, y, x) volume,
-#       reverse_rows, reverse_columns). The letters name the trajectory component
-# that lands on slices, rows and columns, in that order: 'zyx' keeps the gridded
-# order, 'zxy' swaps the in-plane axes, 'xyz' puts component 0 through-plane and
-# component 2 along the columns. '_fx' reverses the columns, '_fy' the rows,
-# '_fxy' both; 'orientationflipslice' reverses the slices.
+# Which trajectory component maps to the acquisition's read, phase and slice
+# axes is not encoded by the trajectory file; the orientation setting selects
+# that mapping and any sign corrections. The table below is written for a
+# gridder whose output axes follow the trajectory columns in reverse, i.e. a
+# (component 2, component 1, component 0) volume, which is what the original
+# sodium gridder produced. sigpy's nufft_adjoint (quickgrid, cgsense3d) puts
+# component i on output axis i instead, so for those apps the natural order is
+# the key 'xyz', not 'zyx'. The 'zyx' default hid this until 2026-10-05, when
+# an eraser at the left ear and the fill plug at the vertex of a head phantom
+# showed sagittal content in transversal frames; with 'xyz' and no flips all
+# three axes agree with the interpreter's header (read L->R, phase A->P, slice
+# F->H), so the header is right and no sign corrections are needed.
 #
-# 'xyz' is what the Pulseq interpreter on the Terra.X (SEQ_ARBITRARY_v151,
-# measured 2026-10-05 with an eraser at the left ear and the fill plug at the
-# vertex of a head phantom) needs: the header reports a transversal frame
-# (read L->R, phase A->P, slice F->H) while the sequence's x gradient runs F->H
-# and its z gradient runs L->R, so components 0 and 2 have to be swapped.
+# key: (source axes of (slices, rows, columns) in the gridded volume,
+#       reverse_rows, reverse_columns). The letters name the trajectory
+# component that lands on slices, rows and columns, in that order; the axis
+# each letter refers to assumes the (z, y, x) storage of the table's origin,
+# so 'xyz' means transpose(2, 1, 0) of the stored array. '_fx' reverses the
+# columns, '_fy' the rows, '_fxy' both; 'orientationflipslice' the slices.
 _GRIDDED_AXIS_OF_COMPONENT = {"z": 0, "y": 1, "x": 2}
 ORIENTATION_TRANSFORMS = {
     f"{letters}{suffix}": (

@@ -34,12 +34,14 @@ scans and back to `auto` afterwards.
 
 Orientation (`orientation`, default `xyz` since 1.2.2): the three letters name
 the trajectory components placed on (slices, rows, columns); `_fx`/`_fy`
-reverse columns/rows and `orientationflipslice` the slices. On the Terra.X the
-Pulseq interpreter reports a transversal frame but plays the sequence's x
-gradient along F-H and its z gradient along L-R, so `xyz` is needed; `zyx` (the
-pre-1.2.2 default) shows sagittal content in transversal frames. Verified with
-an eraser at the left ear and the fill plug at the vertex of a head phantom.
-Set `"orientation": "xyz"` in `wip_070_fire_quickgrid.json` as well.
+reverse columns/rows and `orientationflipslice` the slices. quickgrid grids
+with sigpy, whose output axes follow the trajectory columns, so `xyz` is the
+natural order and makes the volume agree with the interpreter's header (read
+L-R, phase A-P, slice F-H) with no flips. `zyx`, the pre-1.2.2 default, was
+written for a gridder with reversed axes and shows sagittal content in
+transversal frames. Verified with an eraser at the left ear and the fill plug
+at the vertex of a head phantom. Set `"orientation": "xyz"` in
+`wip_070_fire_quickgrid.json` as well.
 
 Trajectories in `fire\share` (mounted as `/tmp/share`) are also candidates for
 `auto`, matched by `(samples, readouts)`, so a new one only has to be copied there.

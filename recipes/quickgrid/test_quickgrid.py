@@ -56,7 +56,7 @@ def test_defaults_match_the_openrecon_label(monkeypatch):
     m = _import_quickgrid(monkeypatch)
     label = json.loads((RECIPE_DIR / "OpenReconLabel.json").read_text())
     params = {p["id"]: p for p in label["parameters"]}
-    assert len(params) <= 14
+    assert len(params) <= 16
     assert params["config"]["default"] == m.RECON_NAME == "quickgrid"
     for pid, p in params.items():
         assert pid in m.DEFAULTS, f"{pid} is in the label but not in DEFAULTS"
@@ -262,3 +262,40 @@ def test_normalised_combination_flattens_a_receive_ramp(monkeypatch):
     # SoS of two opposite ramps is itself curved across the ball; the normalised
     # modes must be flatter than SoS and flat to within a few percent
     assert out["SoSnorm"] < 0.05 and out["SoSvbc"] < 0.5 * out["SoS"] + 0.05, out
+
+
+def _fake_acquisitions(counters, contrasts=None):
+    from types import SimpleNamespace
+    out = []
+    for n, c in enumerate(counters):
+        head = SimpleNamespace(scan_counter=int(c), idx=SimpleNamespace(contrast=0 if contrasts is None else int(contrasts[n])))
+        out.append(SimpleNamespace(getHead=lambda h=head: h))
+    return out
+
+
+def test_echosplit_groups_and_trajectory_rows(monkeypatch):
+    """Two echoes per TR: acquisitions alternate echo 1 / echo 2. Rewind-and-repeat
+    data (2 x rows) share a trajectory row per TR; alternating data (rows) use
+    one row each; an ECO contrast counter overrides the positional rule."""
+    m = _import_quickgrid(monkeypatch)
+    mr = m.mrdrecon
+    rows = 6
+    # rewind and repeat: 12 acquisitions, counters 1..12
+    groups = mr.split_acquisitions_by_echo(_fake_acquisitions(range(1, 2 * rows + 1)), 2)
+    assert [g["index"] for g in groups] == [0, 1] and all(len(g["acquisitions"]) == rows for g in groups)
+    assert list(groups[0]["global_indices"]) == [0, 2, 4, 6, 8, 10]
+    for g in groups:
+        r = mr._echo_trajectory_rows(g["global_indices"], 2, g["total"], rows)
+        assert list(r) == list(range(rows)), g["index"]
+    # alternating: 6 acquisitions over 6 rows -> echo 1 rows 0,2,4 and echo 2 rows 1,3,5
+    groups = mr.split_acquisitions_by_echo(_fake_acquisitions(range(1, rows + 1)), 2)
+    assert list(mr._echo_trajectory_rows(groups[0]["global_indices"], 2, rows, rows)) == [0, 2, 4]
+    assert list(mr._echo_trajectory_rows(groups[1]["global_indices"], 2, rows, rows)) == [1, 3, 5]
+    # contrast counter present: grouping follows it even when the positions disagree
+    groups = mr.split_acquisitions_by_echo(_fake_acquisitions(range(1, 7), contrasts=[0, 0, 0, 1, 1, 1]), 2)
+    assert list(groups[0]["global_indices"]) == [0, 1, 2] and list(groups[1]["global_indices"]) == [3, 4, 5]
+    # a gap in the counters keeps the global positions (echo of a dropped TR stays aligned)
+    groups = mr.split_acquisitions_by_echo(_fake_acquisitions([1, 2, 5, 6]), 2)
+    assert list(groups[0]["global_indices"]) == [0, 4] and list(groups[1]["global_indices"]) == [1, 5]
+    assert list(mr._echo_trajectory_rows(groups[1]["global_indices"], 2, 6, 3)) == [0, 2]
+    assert m.DEFAULTS["echosplit"] == 1

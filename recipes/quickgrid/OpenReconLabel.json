@@ -70,6 +70,8 @@
      "information": {"en": "0 uses every receive channel (then PCA coil compression). A positive value keeps only the first N physical channels."}},
     {"id": "maxworkers", "label": {"en": "Gridding processes"}, "type": "int", "minimum": 1, "maximum": 32, "default": 8,
      "information": {"en": "Coils are gridded in parallel processes. Capped automatically by the CPUs and memory the container is given; the result does not depend on it."}},
+    {"id": "echosplit", "label": {"en": "Echoes per TR"}, "type": "int", "minimum": 1, "maximum": 4, "default": 1,
+     "information": {"en": "1 for single-echo data. 2 for the two-echo cones files: acquisitions are split by their position in the TR (or by the contrast counter) and each echo is reconstructed into its own series (_echo1, _echo2). Rewind-and-repeat files share one trajectory row per TR; alternating-echo files use one row per acquisition."}},
     {"id": "orientation", "label": {"en": "Orientation"}, "type": "choice",
      "values": [{"id": "zyx", "name": {"en": "zyx"}}, {"id": "zyx_fx", "name": {"en": "zyx_fx"}}, {"id": "zyx_fy", "name": {"en": "zyx_fy"}}, {"id": "zyx_fxy", "name": {"en": "zyx_fxy"}},
                 {"id": "zxy", "name": {"en": "zxy"}}, {"id": "zxy_fx", "name": {"en": "zxy_fx"}}, {"id": "zxy_fy", "name": {"en": "zxy_fy"}}, {"id": "zxy_fxy", "name": {"en": "zxy_fxy"}},

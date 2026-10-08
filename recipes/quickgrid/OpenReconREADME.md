@@ -58,6 +58,15 @@ times R0, trilinear resampling of the volume at p + dv(p), Jacobian intensity
 factor capped at 10. Images remain tagged ND on the scanner (ICE did not
 correct them); `DistorCorMode` stays ND in the XML.
 
+Multi-echo data (1.2.4): `echosplit` 2 reconstructs the two-echo cones files
+into two series, `_echo1` (TE 80 µs) and `_echo2`. Acquisitions are assigned to
+echoes by their position in the TR (scan counter), or by the contrast counter
+when the sequence sets an ECO label. Rewind-and-repeat files (`_e2`, two ADCs
+per TR, twice as many acquisitions as trajectory rows) share one trajectory row
+per TR; alternating files (`_de2000`, one ADC per TR) use one row each. With
+`echosplit` 1 a two-echo stream is silently cropped to the first half and every
+second readout lands on the wrong cone, so set it for those files.
+
 Intensity normalisation (1.2.3): `coilcombinemode` `SoSnorm` divides the
 sum-of-squares image by its own low-resolution envelope (centre of k-space,
 `normfraction` 0.125 of kmax, Gaussian-smoothed, regularised division), which

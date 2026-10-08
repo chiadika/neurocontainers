@@ -88,6 +88,7 @@ OPENRECON_DEFAULTS = {
     "orientation": "zyx_fy",
     "orientationflipslice": False,
     "orientationdebugseries": False,
+    "echosplit": 1,            # echoes per TR: split the stream and reconstruct one series per echo
 }
 
 
@@ -122,6 +123,7 @@ def configure(name=None, defaults=None, trajectories=None,
 
 
 OUTPUT_IMAGE_SERIES_INDEX = 1
+DEBUG_NAME_SUFFIX = ""          # set per echo by process_raw so debug arrays do not overwrite each other
 # Emit the reconstructed volume as one 3D MRD image (True) or as one 2D image
 # per slice (False). The single 3D image matches the native ICE contract under
 # TPI_3D_online, but IceProgramStandard's IceImageReconFunctors::ComputeImage
@@ -584,6 +586,71 @@ def _readout_row_indices(acquisitions):
         int(rows[0]),
         int(rows[-1]),
     )
+    return rows
+
+
+def _acquisition_global_indices(acquisitions):
+    """0-based position of each acquisition in the designed sequence: the scan
+    counter relative to the first one, or arrival order when counters are unusable."""
+    counters = _acquisition_scan_counters(acquisitions)
+    if counters is None:
+        return np.arange(len(acquisitions), dtype=np.int64)
+    return counters - counters[0]
+
+
+def _echo_of_acquisitions(acquisitions, echo_count, global_indices):
+    """Echo index per acquisition: the MRD contrast counter when the stream sets
+    it (an ECO label), otherwise the position within the TR, i mod echo_count."""
+    try:
+        contrast = np.array([int(a.getHead().idx.contrast) for a in acquisitions], dtype=np.int64)
+    except Exception:
+        contrast = None
+    if contrast is not None and contrast.max() > 0 and np.unique(contrast).size == echo_count:
+        logging.info("echosplit: using the contrast counter (%d values)", echo_count)
+        return contrast - contrast.min()
+    return global_indices % echo_count
+
+
+def split_acquisitions_by_echo(acquisitions, echo_count):
+    """Split a multi-echo stream into per-echo groups.
+
+    Returns a list of dicts with ``index`` (echo number from 0), ``count``,
+    ``acquisitions``, ``global_indices`` (positions in the full stream) and
+    ``total`` (acquisitions in the full stream), in echo order.
+    """
+    echo_count = max(1, int(echo_count))
+    global_indices = _acquisition_global_indices(acquisitions)
+    echo = _echo_of_acquisitions(acquisitions, echo_count, global_indices)
+    groups = []
+    for e in range(echo_count):
+        keep = np.nonzero(echo == e)[0]
+        groups.append(dict(index=e, count=echo_count,
+                           acquisitions=[acquisitions[int(i)] for i in keep],
+                           global_indices=global_indices[keep], total=len(acquisitions)))
+        logging.info("echosplit: echo %d/%d has %d acquisitions", e + 1, echo_count, keep.size)
+    return groups
+
+
+def _echo_trajectory_rows(global_indices, echo_count, total_acquisitions, trajectory_rows):
+    """Trajectory row of each acquisition in one echo's subset.
+
+    total == echo_count * rows: the echoes of a TR share one readout path
+    (rewind and repeat), so acquisition i uses row floor(i / echo_count).
+    total == rows: every acquisition has its own path (alternating echoes), so
+    acquisition i uses row i. Anything else is reported and the closer rule used.
+    """
+    i = np.asarray(global_indices, dtype=np.int64)
+    shared = int(total_acquisitions) == int(echo_count) * int(trajectory_rows)
+    own = int(total_acquisitions) == int(trajectory_rows)
+    if not (shared or own):
+        shared = int(total_acquisitions) > int(trajectory_rows)
+        logging.warning(
+            "echosplit: %d acquisitions do not match %d trajectory rows x %d echoes or x 1; "
+            "assuming %s", total_acquisitions, trajectory_rows, echo_count,
+            "shared rows (floor(i/echoes))" if shared else "one row per acquisition")
+    rows = i // int(echo_count) if shared else i
+    logging.info("echosplit: trajectory rows %s for this echo (%s)",
+                 "floor(i/%d)" % echo_count if shared else "i", "rewind-and-repeat" if shared else "alternating")
     return rows
 
 
@@ -1746,6 +1813,8 @@ def _build_output_images(
     orientation=DEFAULT_ORIENTATION,
     flip_slice=False,
     emit_debug_series=False,
+    series_offset=0,
+    description_suffix="",
 ):
     volume = np.asarray(volume, dtype=np.float32)
     if volume.ndim != 3:
@@ -1807,8 +1876,9 @@ def _build_output_images(
             output_fov_mm=output_fov_mm,
             orientation_key=orientation_key,
             flip_slice=slice_flip,
-            series_index=OUTPUT_IMAGE_SERIES_INDEX + offset,
+            series_index=OUTPUT_IMAGE_SERIES_INDEX + int(series_offset) + offset,
             label_series=emit_debug_series,
+            description_suffix=description_suffix,
         )
     ]
 
@@ -1823,6 +1893,7 @@ def _build_single_output_image(
     flip_slice,
     series_index,
     label_series,
+    description_suffix="",
 ):
     # Stage 1 resolves the trajectory components against the acquisition axes.
     # Stage 2 transforms the acquisition vectors together with the pixels in
@@ -1840,7 +1911,7 @@ def _build_single_output_image(
 
     center_position = np.asarray(reference_head.position, dtype=float)
 
-    series_description = f"{_safe_protocol_name(metadata)}_{OUTPUT_SERIES_DESCRIPTION}"
+    series_description = f"{_safe_protocol_name(metadata)}_{OUTPUT_SERIES_DESCRIPTION}{description_suffix}"
     if label_series:
         series_description = (
             f"{series_description}_ori_{orientation_key}_fz{int(bool(flip_slice))}"
@@ -2148,7 +2219,7 @@ class ReconInput:
     def save_debug(self, name, array):
         """Drop an array into the debug folder for offline inspection."""
         _ensure_debug_folder()
-        np.save(os.path.join(debugFolder, f"{RECON_NAME}_{name}.npy"), np.asarray(array))
+        np.save(os.path.join(debugFolder, f"{RECON_NAME}_{name}{DEBUG_NAME_SUFFIX}.npy"), np.asarray(array))
 
 
 def _resolve_config(config, metadata):
@@ -2178,8 +2249,13 @@ def _resolve_config(config, metadata):
     return resolved
 
 
-def prepare(group, config, metadata):
-    """Run the standard preparation and return a :class:`ReconInput`."""
+def prepare(group, config, metadata, echo=None):
+    """Run the standard preparation and return a :class:`ReconInput`.
+
+    ``echo`` (from :func:`split_acquisitions_by_echo`) makes this one echo of a
+    multi-echo stream: the trajectory rows then follow the echo rule instead
+    of the scan counters.
+    """
     params = _resolve_config(config, metadata)
 
     data = _build_data_array(group)
@@ -2188,6 +2264,10 @@ def prepare(group, config, metadata):
     # log needs to explain why.
     row_indices = _readout_row_indices(group)
     trajectory = _load_trajectory(group, config)
+    if echo is not None:
+        row_indices = _echo_trajectory_rows(
+            echo["global_indices"], echo["count"], echo["total"], trajectory.shape[1]
+        )
     data, trajectory = _clip_data_to_trajectory(
         data,
         trajectory,
@@ -2260,15 +2340,22 @@ def prepare(group, config, metadata):
     )
 
 
-def process_raw(group, connection, config, metadata, reconstruct):
-    """Prepare, hand off to the algorithm, then emit scanner images."""
+def process_raw(group, connection, config, metadata, reconstruct, echo=None):
+    """Prepare, hand off to the algorithm, then emit scanner images.
+
+    With ``echo`` the group is one echo of a multi-echo stream: its images go
+    out as a separate series (index offset 100 per echo, description suffix
+    ``_echoN``) and its debug arrays carry the same suffix.
+    """
+    global DEBUG_NAME_SUFFIX
     if not group:
         return []
 
     tic = perf_counter()
     _ensure_debug_folder()
+    DEBUG_NAME_SUFFIX = f"_echo{echo['index'] + 1}" if echo is not None else ""
 
-    recon = prepare(group, config, metadata)
+    recon = prepare(group, config, metadata, echo=echo)
     params = recon.config
     logging.info("Resolved configuration: %s", params)
 
@@ -2313,6 +2400,8 @@ def process_raw(group, connection, config, metadata, reconstruct):
         orientation=orientation,
         flip_slice=params["orientationflipslice"],
         emit_debug_series=orientation_debug_series,
+        series_offset=100 * echo["index"] if echo is not None else 0,
+        description_suffix=f"_echo{echo['index'] + 1}" if echo is not None else "",
     )
 
 
@@ -2394,9 +2483,17 @@ def run(connection, config, metadata, reconstruct):
             logging.info(
                 "Processing %d acquired readouts (end of stream)", len(acquisitions)
             )
-            connection.send_image(
-                process_raw(acquisitions, connection, config, metadata, reconstruct)
-            )
+            echo_count = max(1, _config_int(config, "echosplit", OPENRECON_DEFAULTS["echosplit"]))
+            if echo_count > 1:
+                images = []
+                for echo in split_acquisitions_by_echo(acquisitions, echo_count):
+                    images.extend(process_raw(echo["acquisitions"], connection, config, metadata,
+                                              reconstruct, echo=echo))
+                connection.send_image(images)
+            else:
+                connection.send_image(
+                    process_raw(acquisitions, connection, config, metadata, reconstruct)
+                )
 
         if passthrough_images:
             logging.warning(

@@ -95,6 +95,7 @@ DEFAULTS = {
     "maxworkers": 8,            # coil-parallel gridding processes (capped by CPUs and memory)
     "applyn4biascorrection": False,
     "orientation": "xyz",
+    "echosplit": 1,             # echoes per TR; >1 reconstructs one series per echo
     "orientationflipslice": False,
     "gradunwarp": "3D",         # off | 3D | 3Dnojac | 2D  (gradient-nonlinearity correction)
     "gradcoeffile": "auto",     # Siemens coeff_<coil>.grad: 'auto' searches /opt/quickgrid and /tmp/share

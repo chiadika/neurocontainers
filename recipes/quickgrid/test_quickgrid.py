@@ -299,3 +299,8 @@ def test_echosplit_groups_and_trajectory_rows(monkeypatch):
     assert list(groups[0]["global_indices"]) == [0, 4] and list(groups[1]["global_indices"]) == [1, 5]
     assert list(mr._echo_trajectory_rows(groups[1]["global_indices"], 2, 6, 3)) == [0, 2]
     assert m.DEFAULTS["echosplit"] == 1
+    # four echoes cycling over two rewind-and-repeat TRs: 2 ADCs per row, echo i mod 4
+    groups = mr.split_acquisitions_by_echo(_fake_acquisitions(range(1, 13)), 4)
+    assert [list(g["global_indices"]) for g in groups] == [[0, 4, 8], [1, 5, 9], [2, 6, 10], [3, 7, 11]]
+    assert list(mr._echo_trajectory_rows(groups[2]["global_indices"], 4, 12, 6)) == [1, 3, 5]
+    assert list(mr._echo_trajectory_rows(groups[0]["global_indices"], 4, 12, 6)) == [0, 2, 4]

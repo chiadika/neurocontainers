@@ -634,24 +634,23 @@ def split_acquisitions_by_echo(acquisitions, echo_count):
 def _echo_trajectory_rows(global_indices, echo_count, total_acquisitions, trajectory_rows):
     """Trajectory row of each acquisition in one echo's subset.
 
-    total == echo_count * rows: the echoes of a TR share one readout path
-    (rewind and repeat), so acquisition i uses row floor(i / echo_count).
-    total == rows: every acquisition has its own path (alternating echoes), so
-    acquisition i uses row i. Anything else is reported and the closer rule used.
+    The stream holds `adcs_per_row = total / rows` acquisitions per trajectory
+    readout: 1 when every acquisition has its own path (alternating echoes),
+    2 when a TR reads its cone twice (rewind and repeat), and so on. Acquisition
+    i then uses row floor(i / adcs_per_row), whatever the echo count: a four-echo
+    pattern that cycles over two rewind-and-repeat TRs has echo i mod 4 on row
+    floor(i / 2). A non-integer ratio is reported and rounded.
     """
     i = np.asarray(global_indices, dtype=np.int64)
-    shared = int(total_acquisitions) == int(echo_count) * int(trajectory_rows)
-    own = int(total_acquisitions) == int(trajectory_rows)
-    if not (shared or own):
-        shared = int(total_acquisitions) > int(trajectory_rows)
+    ratio = float(total_acquisitions) / float(max(1, int(trajectory_rows)))
+    adcs_per_row = max(1, int(round(ratio)))
+    if abs(ratio - adcs_per_row) > 1e-6:
         logging.warning(
-            "echosplit: %d acquisitions do not match %d trajectory rows x %d echoes or x 1; "
-            "assuming %s", total_acquisitions, trajectory_rows, echo_count,
-            "shared rows (floor(i/echoes))" if shared else "one row per acquisition")
-    rows = i // int(echo_count) if shared else i
-    logging.info("echosplit: trajectory rows %s for this echo (%s)",
-                 "floor(i/%d)" % echo_count if shared else "i", "rewind-and-repeat" if shared else "alternating")
-    return rows
+            "echosplit: %d acquisitions over %d trajectory rows is not an integer number of "
+            "ADCs per readout (%.3f); assuming %d", total_acquisitions, trajectory_rows, ratio, adcs_per_row)
+    logging.info("echosplit: %d ADC(s) per trajectory row -> acquisition i uses row floor(i/%d) (%d echoes split)",
+                 adcs_per_row, adcs_per_row, echo_count)
+    return i // adcs_per_row
 
 
 def _trajectory_dimensions(path, dataset_name):

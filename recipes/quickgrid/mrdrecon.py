@@ -480,6 +480,32 @@ def _trajectory_dataset_name(config):
 TRAJECTORY_SHORTFALL_TOLERANCE = 0.02
 
 
+def _stream_vs_trajectory(total, echo_count, trajectory_rows):
+    """Relate a stream of ``total`` acquisitions to a trajectory of ``trajectory_rows``.
+
+    A multi-echo stream holds an integer number k of ADCs per trajectory row
+    (1 for alternating echoes, 2 for rewind-and-repeat, ...), so the whole
+    stream, not one echo's share of it, is what identifies the trajectory; k is
+    bounded by the echo count, and an unsplit stream must match row for row.
+    Returns ``("exact", k)``, ``("short", k, missing)`` for a stream that stopped
+    within TRAJECTORY_SHORTFALL_TOLERANCE of k * rows, or None.
+    """
+    rows = int(trajectory_rows)
+    total = int(total)
+    if rows <= 0 or total <= 0:
+        return None
+    best = None
+    for k in range(1, max(1, int(echo_count)) + 1):
+        full = k * rows
+        if total == full:
+            return ("exact", k)
+        if full * (1.0 - TRAJECTORY_SHORTFALL_TOLERANCE) <= total < full:
+            missing = full - total
+            if best is None or missing < best[2]:
+                best = ("short", k, missing)
+    return best
+
+
 def _acquisition_dimensions(acquisitions):
     """(samples, readouts) actually present in the incoming acquisitions."""
     readouts = len(acquisitions)
@@ -700,7 +726,7 @@ def _trajectory_candidates():
     return candidates
 
 
-def _autoselect_trajectory(acquisitions, dataset_name):
+def _autoselect_trajectory(acquisitions, dataset_name, echo=None):
     """Pick the bundled trajectory whose shape matches the acquired data.
 
     Selecting the wrong trajectory is not a benign mistake here. Spiral
@@ -712,10 +738,20 @@ def _autoselect_trajectory(acquisitions, dataset_name):
 
     The bundled trajectories have distinct (samples, readouts), so the acquired
     shape identifies the sequence unambiguously.
+
+    With ``echo`` (one echo of a split stream) the match is made on the whole
+    stream: ``echo["total"]`` acquisitions over an integer number of ADCs per
+    trajectory row. One echo's share alone misidentifies the sequence -- half of
+    an alternating-echo file looks like a slightly short single-echo file of
+    half the rows.
     """
     samples, readouts = _acquisition_dimensions(acquisitions)
-    logging.info("Auto-selecting trajectory for acquired data: samples=%d readouts=%d",
-                 samples, readouts)
+    total = int(echo["total"]) if echo else readouts
+    echo_count = int(echo["count"]) if echo else 1
+    stream = (f" (echo {int(echo['index']) + 1} of {echo_count}; {total} acquisitions in the stream)"
+              if echo else "")
+    logging.info("Auto-selecting trajectory for acquired data: samples=%d readouts=%d%s",
+                 samples, readouts, stream)
 
     matches, short_matches, catalogue = [], [], []
     for key, path in sorted(_trajectory_candidates().items()):
@@ -723,34 +759,41 @@ def _autoselect_trajectory(acquisitions, dataset_name):
         if dims is None:
             continue
         catalogue.append(f"{key} (samples={dims[0]}, readouts={dims[1]})")
-        if dims == (samples, readouts):
-            matches.append((key, path))
-        elif dims[0] == samples and 0 < readouts < dims[1]:
+        if dims[0] != samples:
+            continue
+        relation = _stream_vs_trajectory(total, echo_count, dims[1])
+        if relation is None:
+            continue
+        if relation[0] == "exact":
+            matches.append((key, path, relation[1]))
+        else:
             # A truncated acquisition -- ICE has been seen to close the raw
             # channel a few readouts before the end -- should still match the
             # sequence it came from. Keep the window tight enough that the
             # bundled trajectories stay mutually exclusive, and rely on
-            # scan_counter alignment for correctness.
-            if readouts >= dims[1] * (1.0 - TRAJECTORY_SHORTFALL_TOLERANCE):
-                short_matches.append((key, path, dims[1]))
+            # scan_counter alignment for correctness. An exact match always wins.
+            short_matches.append((key, path, dims[1], relation[1], relation[2]))
 
-    unique = {path for _, path in matches}
+    unique = {path for _, path, _ in matches}
     if len(unique) == 1:
-        key, path = matches[0]
-        logging.info("Auto-selected trajectory '%s': %s", key, path)
+        key, path, adcs = matches[0]
+        logging.info("Auto-selected trajectory '%s'%s: %s", key,
+                     f" ({adcs} ADC(s) per trajectory row)" if echo else "", path)
         return path
 
     available = "; ".join(catalogue) if catalogue else "none readable"
 
-    if not matches and len({path for _, path, _ in short_matches}) == 1:
-        key, path, full = short_matches[0]
+    if not matches and len({path for _, path, _, _, _ in short_matches}) == 1:
+        key, path, rows, adcs, missing = short_matches[0]
+        full = adcs * rows
         logging.warning(
             "Auto-selected trajectory '%s' for a short acquisition: %d of %d "
-            "readouts received (%.2f%% missing): %s",
+            "acquisitions received (%.2f%% missing)%s: %s",
             key,
-            readouts,
+            total,
             full,
-            100.0 * (full - readouts) / full,
+            100.0 * missing / full,
+            f" at {adcs} ADC(s) per trajectory row" if echo else "",
             path,
         )
         return path
@@ -758,24 +801,24 @@ def _autoselect_trajectory(acquisitions, dataset_name):
     if not matches:
         raise ValueError(
             f"No bundled trajectory matches the acquired data (samples={samples}, "
-            f"readouts={readouts}). Available: {available}. The acquired sequence "
+            f"readouts={readouts}{stream}). Available: {available}. The acquired sequence "
             "does not correspond to any bundled trajectory -- set 'trajectoryfile' "
             "to an explicit HDF5 path for this sequence."
         )
     raise ValueError(
-        f"Acquired data (samples={samples}, readouts={readouts}) matches more than "
+        f"Acquired data (samples={samples}, readouts={readouts}{stream}) matches more than "
         f"one bundled trajectory: {available}. Set 'trajectoryfile' explicitly."
     )
 
 
-def _resolve_trajectory_file(config, acquisitions=None):
+def _resolve_trajectory_file(config, acquisitions=None, echo=None):
     explicit_file = _config_str(
         config,
         "trajectoryfile",
         OPENRECON_DEFAULTS["trajectoryfile"],
     ).strip()
     if explicit_file.lower() == AUTO_TRAJECTORY and acquisitions:
-        return _autoselect_trajectory(acquisitions, _trajectory_dataset_name(config))
+        return _autoselect_trajectory(acquisitions, _trajectory_dataset_name(config), echo)
     if explicit_file:
         if explicit_file in BUNDLED_TRAJECTORIES:
             trajectory_file = BUNDLED_TRAJECTORIES[explicit_file]
@@ -791,7 +834,7 @@ def _resolve_trajectory_file(config, acquisitions=None):
     ).strip() or OPENRECON_DEFAULTS["trajectorypreset"]
 
     if preset.lower() == AUTO_TRAJECTORY and acquisitions:
-        return _autoselect_trajectory(acquisitions, _trajectory_dataset_name(config))
+        return _autoselect_trajectory(acquisitions, _trajectory_dataset_name(config), echo)
 
     if preset in BUNDLED_TRAJECTORIES:
         trajectory_file = BUNDLED_TRAJECTORIES[preset]
@@ -806,7 +849,7 @@ def _resolve_trajectory_file(config, acquisitions=None):
     )
 
 
-def _load_trajectory(acquisitions, config):
+def _load_trajectory(acquisitions, config, echo=None):
     embedded_trajectory = []
     for acquisition in acquisitions:
         traj = getattr(acquisition, "traj", None)
@@ -824,7 +867,7 @@ def _load_trajectory(acquisitions, config):
         LAST_TRAJECTORY_SOURCE = None
         return trajectory
 
-    trajectory_file = _resolve_trajectory_file(config, acquisitions)
+    trajectory_file = _resolve_trajectory_file(config, acquisitions, echo)
     if not trajectory_file:
         raise ValueError(
             "No embedded trajectory found in the MRD acquisitions and no "
@@ -844,34 +887,37 @@ def _load_trajectory(acquisitions, config):
     samples, readouts = _acquisition_dimensions(acquisitions)
     shape = _normalize_trajectory_array(trajectory).shape
     traj_samples, traj_readouts = int(shape[0]), int(shape[1])
-    if readouts and (traj_samples, traj_readouts) != (samples, readouts):
+    if readouts:
+        # One echo of a split stream is judged by the whole stream (an integer
+        # number of ADCs per trajectory row); an unsplit stream row for row.
+        total = int(echo["total"]) if echo else readouts
+        echo_count = int(echo["count"]) if echo else 1
+        relation = _stream_vs_trajectory(total, echo_count, traj_readouts)
         # A truncated acquisition still belongs to this trajectory: ICE has been
         # seen to close the raw channel a few readouts short of the end. Accept
         # the same shortfall the auto-selector does, and let scan_counter
         # alignment place the readouts that did arrive. Anything else -- a
         # different sample count, more readouts than the trajectory has, or a
         # shortfall beyond the tolerance -- is a different sequence.
-        shortfall_ok = (
-            traj_samples == samples
-            and 0 < readouts < traj_readouts
-            and readouts >= traj_readouts * (1.0 - TRAJECTORY_SHORTFALL_TOLERANCE)
-        )
-        if not shortfall_ok:
+        if traj_samples != samples or relation is None:
+            stream = (f" ({total} acquisitions in the {echo_count}-echo stream)" if echo else "")
             raise ValueError(
                 f"Trajectory {trajectory_file} describes samples={traj_samples} "
                 f"readouts={traj_readouts}, but the acquisition has samples={samples} "
-                f"readouts={readouts}. These must match exactly -- reconstructing a "
+                f"readouts={readouts}{stream}. These must match exactly -- reconstructing a "
                 "sequence with another sequence's trajectory produces a wrong image, "
                 "not a degraded one. Set 'trajectoryfile' to 'auto' to select by shape."
             )
-        logging.warning(
-            "Acquisition is short by %d of %d readouts (%.2f%%); keeping trajectory "
-            "%s and aligning the readouts that arrived.",
-            traj_readouts - readouts,
-            traj_readouts,
-            100.0 * (traj_readouts - readouts) / traj_readouts,
-            trajectory_file,
-        )
+        if relation[0] == "short":
+            full = relation[1] * traj_readouts
+            logging.warning(
+                "Acquisition is short by %d of %d acquisitions (%.2f%%); keeping trajectory "
+                "%s and aligning the readouts that arrived.",
+                relation[2],
+                full,
+                100.0 * relation[2] / full,
+                trajectory_file,
+            )
     LAST_TRAJECTORY_SOURCE = trajectory_file
     return trajectory
 
@@ -914,9 +960,18 @@ def _compute_default_matrix_size(metadata):
         return OPENRECON_DEFAULTS["matrixsize"]
 
 
-def _clip_data_to_trajectory(data, trajectory, sample_offset, row_indices=None):
+def _clip_data_to_trajectory(data, trajectory, sample_offset, row_indices=None, selection=None):
+    """Align the raw data with the trajectory; see the module notes on row mapping.
+
+    ``selection``, when a dict is passed, receives what was done to the source
+    trajectory -- ``swapped`` axes, the ``rows`` kept (None when all, in order),
+    ``sample_offset``, ``samples`` and ``readouts`` -- so that per-sample
+    side data stored with the trajectory (the shipped DCF) can follow it.
+    """
     data_readouts = data.shape[1]
     data_samples = data.shape[2]
+    swapped = False
+    rows_used = None
 
     if trajectory.ndim == 3:
         direct_score = abs(trajectory.shape[0] - data_samples) + abs(trajectory.shape[1] - data_readouts)
@@ -930,6 +985,7 @@ def _clip_data_to_trajectory(data, trajectory, sample_offset, row_indices=None):
                 data_readouts,
             )
             trajectory = np.swapaxes(trajectory, 0, 1)
+            swapped = True
 
     available_sample_offset = max(0, trajectory.shape[0] - data_samples)
     applied_sample_offset = max(0, min(sample_offset, available_sample_offset))
@@ -945,7 +1001,8 @@ def _clip_data_to_trajectory(data, trajectory, sample_offset, row_indices=None):
         if int(np.max(row_indices)) < trajectory.shape[1]:
             # Each readout keeps the trajectory row it was acquired on, so a gap
             # in the stream drops rows instead of shifting every later spoke.
-            trajectory = trajectory[:, np.asarray(row_indices, dtype=np.int64), :]
+            rows_used = np.asarray(row_indices, dtype=np.int64)
+            trajectory = trajectory[:, rows_used, :]
         else:
             logging.warning(
                 "Ignoring scan_counter row mapping: row %d is outside the %d "
@@ -965,6 +1022,9 @@ def _clip_data_to_trajectory(data, trajectory, sample_offset, row_indices=None):
             readouts,
             samples,
         )
+    if selection is not None:
+        selection.update(swapped=swapped, rows=rows_used, sample_offset=int(applied_sample_offset),
+                         samples=int(samples), readouts=int(readouts))
     return (
         data[:, :readouts, :samples],
         trajectory[applied_sample_offset:applied_sample_offset + samples, :readouts, :],
@@ -2182,6 +2242,7 @@ class ReconInput:
     config: dict
     metadata: Any
     trajectory_source: Any = None
+    trajectory_selection: Any = None    # rows / samples of the source trajectory actually used (see _clip_data_to_trajectory)
     compression_matrix: Any = None
     cumulative_variance: Any = None
     max_workers: int = 1
@@ -2262,16 +2323,18 @@ def prepare(group, config, metadata, echo=None):
     # gate rejects the acquisition, its shape and any gap are exactly what the
     # log needs to explain why.
     row_indices = _readout_row_indices(group)
-    trajectory = _load_trajectory(group, config)
+    trajectory = _load_trajectory(group, config, echo=echo)
     if echo is not None:
         row_indices = _echo_trajectory_rows(
             echo["global_indices"], echo["count"], echo["total"], trajectory.shape[1]
         )
+    selection = {}
     data, trajectory = _clip_data_to_trajectory(
         data,
         trajectory,
         sample_offset=params["trajectorysampleoffset"],
         row_indices=row_indices,
+        selection=selection,
     )
 
     if 0 < params["maxcoils"] < data.shape[0]:
@@ -2333,6 +2396,7 @@ def prepare(group, config, metadata, echo=None):
         config=params,
         metadata=metadata,
         trajectory_source=LAST_TRAJECTORY_SOURCE,
+        trajectory_selection=selection,
         compression_matrix=compression_matrix,
         cumulative_variance=cumulative_variance,
         max_workers=max_workers,

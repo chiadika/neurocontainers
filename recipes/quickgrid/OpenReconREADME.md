@@ -58,6 +58,16 @@ times R0, trilinear resampling of the volume at p + dv(p), Jacobian intensity
 factor capped at 10. Images remain tagged ND on the scanner (ICE did not
 correct them); `DistorCorMode` stays ND in the XML.
 
+Split streams and shipped DCFs (1.2.6): with `echosplit` the trajectory is
+chosen and checked on the whole stream (an integer number of ADCs per
+trajectory row, bounded by `echosplit`), not on one echo's share of it. One
+echo of the 128³ alternating pair (5676 of 11352 acquisitions) used to match a
+5728-row single-echo file in the share as a "0.9 % short" acquisition. The
+`dcf` stored in a trajectory file now follows the row and sample selection the
+trajectory went through (one echo's rows, or the rows of a scan that stopped
+early) instead of being refused for its size. If several files in the share are
+consistent with the stream, set `trajectoryfile` explicitly.
+
 Multi-echo data (1.2.4): `echosplit` 2 reconstructs the two-echo cones files
 into two series, `_echo1` (TE 80 µs) and `_echo2`. Acquisitions are assigned to
 echoes by their position in the TR (scan counter), or by the contrast counter

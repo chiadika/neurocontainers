@@ -127,13 +127,49 @@ def _dcf_from_file(recon, expected_shape):
         dcf = np.asarray(handle[DCF_DATASET][...], dtype=np.float32)
         method = handle[DCF_DATASET].attrs.get("method", "unknown")
     if dcf.size != int(np.prod(expected_shape)):
-        raise ValueError(
-            f"'{DCF_DATASET}' in {source} has {dcf.size} values but the trajectory "
-            f"has {int(np.prod(expected_shape))} samples; regenerate it with make_dcf.py."
-        )
+        aligned = _align_stored_dcf(dcf, getattr(recon, "trajectory_selection", None), expected_shape)
+        if aligned is None:
+            raise ValueError(
+                f"'{DCF_DATASET}' in {source} has {dcf.size} values but the trajectory "
+                f"has {int(np.prod(expected_shape))} samples; regenerate it with make_dcf.py."
+            )
+        dcf = aligned
     logging.info("DCF: precomputed '%s' from %s (method=%s)",
                  DCF_DATASET, os.path.basename(source), method)
     return np.ascontiguousarray(dcf.reshape(-1))
+
+
+def _align_stored_dcf(dcf, selection, expected_shape):
+    """Put a DCF stored for the whole trajectory file through the same row and
+    sample selection the trajectory went through in preparation.
+
+    One echo of an alternating-echo stream uses every other trajectory row, and a
+    scan that stopped early uses the rows that arrived, so the prepared trajectory
+    is a subset of the file's. The stored weights of those rows are the right
+    relative weights for them: the subset's sampling density differs from the
+    whole file's by a near-constant factor (the echoes interleave uniformly), and
+    the image scaling absorbs a constant. Returns None when the stored array
+    cannot be made to follow the selection.
+    """
+    if not selection or dcf.ndim != 2:
+        return None
+    if selection.get("swapped"):
+        dcf = dcf.T
+    rows = selection.get("rows")
+    total_rows = dcf.shape[1]
+    if rows is not None:
+        rows = np.asarray(rows, dtype=np.int64)
+        if rows.size == 0 or int(rows.max()) >= dcf.shape[1]:
+            return None
+        dcf = dcf[:, rows]
+    offset = int(selection.get("sample_offset", 0))
+    dcf = dcf[offset:offset + int(selection.get("samples", dcf.shape[0])),
+              :int(selection.get("readouts", dcf.shape[1]))]
+    if dcf.shape != tuple(int(n) for n in expected_shape):
+        return None
+    logging.info("DCF: stored weights aligned to the %d of %d trajectory rows this reconstruction uses",
+                 dcf.shape[1], total_rows)
+    return np.ascontiguousarray(dcf)
 
 
 def _looks_uniform_radial(trajectory, tol=0.05):

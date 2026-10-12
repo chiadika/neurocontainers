@@ -44,11 +44,11 @@ def _radial_trajectory(samples=16, spokes=300, kmax=0.5):
     return (radius[:, None, None] * d[None, :, :]).astype(np.float32)
 
 
-def _recon_input(m, traj, kspace, matrix, fov=22.0, source=None, **config):
+def _recon_input(m, traj, kspace, matrix, fov=22.0, source=None, selection=None, **config):
     return m.mrdrecon.ReconInput(
         kspace=kspace, trajectory=traj, raw_kspace=np.transpose(kspace, (0, 2, 1)),
         matrix_size=matrix, fov_cm=fov, config=dict(m.DEFAULTS, **config),
-        metadata=None, trajectory_source=source)
+        metadata=None, trajectory_source=source, trajectory_selection=selection)
 
 
 def test_defaults_match_the_openrecon_label(monkeypatch):
@@ -304,3 +304,70 @@ def test_echosplit_groups_and_trajectory_rows(monkeypatch):
     assert [list(g["global_indices"]) for g in groups] == [[0, 4, 8], [1, 5, 9], [2, 6, 10], [3, 7, 11]]
     assert list(mr._echo_trajectory_rows(groups[2]["global_indices"], 4, 12, 6)) == [1, 3, 5]
     assert list(mr._echo_trajectory_rows(groups[0]["global_indices"], 4, 12, 6)) == [0, 2, 4]
+
+
+def test_stored_dcf_follows_the_trajectory_row_selection(monkeypatch, tmp_path):
+    """One echo of an alternating-echo file, or a scan that stopped early, uses a
+    subset of the trajectory rows; the shipped dcf must be cut the same way
+    instead of being refused for its size (the 1.2.5 failure on the 128^3 pair)."""
+    m = _import_quickgrid(monkeypatch)
+    traj = _radial_trajectory(samples=12, spokes=40)
+    stored = np.random.default_rng(1).random(traj.shape[:2]).astype(np.float32)
+    path = tmp_path / "pair_trajectory.h5"
+    with h5py.File(path, "w") as h:
+        h.create_dataset("k", data=traj); h.create_dataset("dcf", data=stored)
+    rows = np.arange(0, 40, 2)                                  # echo 1 of an alternating pair
+    sel = dict(swapped=False, rows=rows, sample_offset=0, samples=12, readouts=rows.size)
+    ks = np.zeros((1, 12, rows.size), np.complex64)
+    recon = _recon_input(m, traj[:, rows], ks, 16, source=str(path), selection=sel, dcfmode="auto")
+    w = m.density_compensation(recon, recon.coords_index_units())
+    assert np.array_equal(w.reshape(12, rows.size), stored[:, rows])
+    # a sample offset and a short acquisition (rows 0..29 arrived) follow too
+    rows = np.arange(30); sel = dict(swapped=False, rows=rows, sample_offset=2, samples=10, readouts=30)
+    recon = _recon_input(m, traj[2:, :30], np.zeros((1, 10, 30), np.complex64), 16, source=str(path), selection=sel)
+    assert np.array_equal(m.density_compensation(recon, recon.coords_index_units()).reshape(10, 30), stored[2:, :30])
+    # without a selection that explains the size difference it is still refused
+    recon = _recon_input(m, traj[:, :30], np.zeros((1, 12, 30), np.complex64), 16, source=str(path))
+    with pytest.raises(ValueError):
+        m.density_compensation(recon, recon.coords_index_units())
+    # and _clip_data_to_trajectory is what records the selection
+    sel = {}
+    data = np.zeros((1, 20, 12), np.complex64)
+    m.mrdrecon._clip_data_to_trajectory(data, traj, 0, row_indices=np.arange(0, 40, 2), selection=sel)
+    assert list(sel["rows"]) == list(range(0, 40, 2)) and sel["samples"] == 12 and sel["readouts"] == 20
+    assert sel["sample_offset"] == 0 and sel["swapped"] is False
+
+
+def test_auto_selection_judges_a_split_stream_by_the_whole_stream(monkeypatch, tmp_path):
+    """The 128^3 pair: 11352 acquisitions, echosplit 2, next to a single-echo file
+    of 5728 rows. Judged per echo (5676) the single-echo file looked like a 0.9 %
+    short match; judged on the stream it is not, and the pair file matches exactly."""
+    m = _import_quickgrid(monkeypatch)
+    mr = m.mrdrecon
+    assert mr._stream_vs_trajectory(11352, 2, 11352) == ("exact", 1)
+    assert mr._stream_vs_trajectory(11352, 2, 5728) == ("short", 2, 104)      # tolerated only if nothing is exact
+    assert mr._stream_vs_trajectory(5676, 1, 5728) == ("short", 1, 52)        # the unsplit view that misled 1.2.5
+    assert mr._stream_vs_trajectory(65212, 2, 32606) == ("exact", 2)           # rewind-and-repeat
+    assert mr._stream_vs_trajectory(5248, 1, 11352) is None                    # a scan stopped at 46 %
+    assert mr._stream_vs_trajectory(100, 1, 50) is None                        # unsplit: no multiple allowed
+    for name, spokes in (("single", 30), ("pair", 79)):
+        with h5py.File(tmp_path / f"{name}_trajectory.h5", "w") as h:
+            h["k"] = _radial_trajectory(samples=10, spokes=spokes)
+    monkeypatch.setattr(mr, "TRAJECTORY_SEARCH_DIRS", [str(tmp_path)])
+    class Acq:
+        def __init__(self): self.data = np.zeros((1, 10), np.complex64)
+    echo1 = dict(index=0, count=2, total=79)
+    picked = mr._autoselect_trajectory([Acq() for _ in range(40)], "k", echo=echo1)
+    assert picked == str(tmp_path / "pair_trajectory.h5")
+    # the whole-stream rule also drives the trajectory gate in _load_trajectory
+    acqs = [Acq() for _ in range(40)]
+    cfg = {"trajectoryfile": str(tmp_path / "single_trajectory.h5")}
+    with pytest.raises(ValueError):
+        mr._load_trajectory(acqs, cfg, echo=echo1)                   # 79 over 30 rows is no integer number of ADCs per row
+    t = mr._load_trajectory(acqs, {"trajectoryfile": str(tmp_path / "pair_trajectory.h5")}, echo=echo1)
+    assert t.shape[1] == 79
+    # unsplit streams still match row for row, with the short-acquisition tolerance
+    assert mr._autoselect_trajectory([Acq() for _ in range(30)], "k") == str(tmp_path / "single_trajectory.h5")
+    assert mr._autoselect_trajectory([Acq() for _ in range(78)], "k") == str(tmp_path / "pair_trajectory.h5")
+    with pytest.raises(ValueError):
+        mr._autoselect_trajectory([Acq() for _ in range(60)], "k")       # 2 x 30 is not allowed without echosplit

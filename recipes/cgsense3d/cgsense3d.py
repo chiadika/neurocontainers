@@ -29,6 +29,15 @@ Three things make this fast enough to run online:
 The Toeplitz kernel's scale is calibrated numerically against the direct
 operator at startup and the agreement is asserted, so a convention mismatch
 fails loudly instead of quietly rescaling the regularisation.
+
+Everything about talking to the scanner -- receiving readouts, aligning them to
+the trajectory by scan_counter, choosing the trajectory from the data shape,
+splitting multi-echo streams (`echosplit`), coil compression, orientation,
+per-slice emission with correct geometry -- lives in mrdrecon.py and is shared
+with quickgrid. Since 1.2.0 this app also carries quickgrid's output hook for
+gradient-nonlinearity correction (`gradunwarp`, maths in gradwarp.py), bundles
+the same trajectory set, and cuts a stored DCF to the trajectory rows an echo
+or a short acquisition actually uses.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -40,31 +49,55 @@ import numpy as np
 import sigpy
 import sigpy.mri
 
+import gradwarp
+
 import mrdrecon
 
 
 RECON_NAME = "cgsense3d"
 
+# Files baked into the image (the same set as quickgrid). `trajectoryfile: auto`
+# picks the one whose (samples, readouts) matches the acquired data; a wrong
+# pick is refused rather than reconstructed, because phyllotaxis directions
+# depend on the spoke count.
 BUNDLED_TRAJECTORIES = {
     "radial3d_res128_us2x": f"/opt/{RECON_NAME}/radial3d_res128_us2x_trajectory.h5",
     "radial3d_res128_nyquist": f"/opt/{RECON_NAME}/radial3d_res128_nyquist_trajectory.h5",
     "radial3d_n6434": f"/opt/{RECON_NAME}/radial3d_n6434_trajectory.h5",
-    "cones3d_n68785": f"/opt/{RECON_NAME}/cones3d_n68785_trajectory.h5",   # 256^3 / 250 mm / TE 50, matrix 266, with dcf
-    "cones3d_n34506": f"/opt/{RECON_NAME}/cones3d_n34506_trajectory.h5",   # same, R=2, matrix 278, with dcf
-}
-# Larger trajectories go to the scanner's fire\share (/tmp/share); `auto` also
-# searches there (mrdrecon.TRAJECTORY_SEARCH_DIRS). Listed here for the UI only.
-SHARE_TRAJECTORIES = {
-    "cones3d_n206435": f"{mrdrecon.SHARE_DIR}/cones3d_n206435_trajectory.h5",  # 512^3 / 250 mm / TR 2, R=4
-    "cones3d_n412489": f"{mrdrecon.SHARE_DIR}/cones3d_n412489_trajectory.h5",  # 512^3 / 250 mm / TR 2, R=2
+    "cones3d_n4846": f"/opt/{RECON_NAME}/cones3d_n4846_trajectory.h5",       # 220 mm R=2, matrix 134, with dcf
+    "cones3d_n9598": f"/opt/{RECON_NAME}/cones3d_n9598_trajectory.h5",       # 220 mm R=1, matrix 134, with dcf
+    "cones3d_n68785": f"/opt/{RECON_NAME}/cones3d_n68785_trajectory.h5",     # 256^3 / 250 mm / TE 50, matrix 266, with dcf
+    "cones3d_n34506": f"/opt/{RECON_NAME}/cones3d_n34506_trajectory.h5",     # same, R=2, matrix 278, with dcf
+    "cones3d_n206435": f"/opt/{RECON_NAME}/cones3d_n206435_trajectory.h5",   # 512^3 / 250 mm / TR 2, R=4, matrix 512
+    "cones3d_n412489": f"/opt/{RECON_NAME}/cones3d_n412489_trajectory.h5",   # 512^3 / 250 mm / TR 2, R=2, matrix 512
 }
 
+# `auto` also searches the scanner's `fire\share` folder (mounted as /tmp/share,
+# mrdrecon.TRAJECTORY_SEARCH_DIRS) for *_trajectory.h5, so a trajectory that is
+# not baked in only has to be copied there. Entries here just name them in the UI.
+SHARE_TRAJECTORIES = {}
+
+# Bundled but deliberately kept out of `auto`: these have the same
+# (samples, readouts) as a BUNDLED_TRAJECTORIES entry and differ only in
+# readout order, so `auto` could not tell them apart. Select them by name.
+NAMED_TRAJECTORIES = {
+    # IR-prepared 256^3 cones (..._sp2_ir32_*.seq): same readouts as cones3d_n34506
+    # in a seeded random acquisition order; rows permuted, Pipe DCF permuted,
+    # `acq_order` dataset records the permutation. matrix 278, fovcm 25.0.
+    "cones3d_n34506_ir32": f"/opt/{RECON_NAME}/cones3d_n34506_ir32_trajectory.h5",
+}
+
+# Keep these in step with OpenReconLabel.json (which is what the scanner JSON
+# config is generated from; it holds at most 14 parameters, so some of these
+# are set only from the JSON and have no UI control).
 DEFAULTS = {
     "config": RECON_NAME,
     "matrixsize": 128,
     "fovcm": 22.0,
     "trajectoryfile": "auto",
     "trajectorydataset": "k",
+    "dcfmode": "auto",          # file -> analytic -> pipe
+    "dcfiterations": 15,        # only if Pipe-Menon has to run at recon time
     # Iterative recon should not have its data term tapered; the regulariser
     # does that job, and a k-space window biases the solution.
     "applyfermifilter": False,
@@ -78,8 +111,13 @@ DEFAULTS = {
     "espiritthresh": 0.02,
     "espiritcrop": 0.8,
     "usetoeplitz": True,
+    "maxworkers": 8,            # threads for the per-coil Toeplitz convolutions (capped by coils)
     "applyn4biascorrection": False,
-    "orientation": "zyx",
+    "orientation": "xyz",       # right for the Terra.X Pulseq interpreter (x runs F->H, z runs L->R)
+    "orientationflipslice": False,
+    "echosplit": 1,             # echoes per TR; >1 reconstructs one series per echo
+    "gradunwarp": "3D",         # off | 3D | 3Dnojac | 2D  (gradient-nonlinearity correction)
+    "gradcoeffile": "auto",     # Siemens coeff_<coil>.grad: 'auto' searches /opt/cgsense3d and /tmp/share
 }
 
 mrdrecon.configure(
@@ -120,14 +158,50 @@ def _load_dcf_from_trajectory(recon, expected_shape):
         return None
 
     if dcf.size != int(np.prod(expected_shape)):
-        raise ValueError(
-            f"'{DCF_DATASET}' in {source} has {dcf.size} values but the trajectory "
-            f"has {int(np.prod(expected_shape))} samples. They must correspond "
-            "one-to-one; regenerate it with make_dcf.py."
-        )
+        aligned = _align_stored_dcf(dcf, getattr(recon, "trajectory_selection", None), expected_shape)
+        if aligned is None:
+            raise ValueError(
+                f"'{DCF_DATASET}' in {source} has {dcf.size} values but the trajectory "
+                f"has {int(np.prod(expected_shape))} samples. They must correspond "
+                "one-to-one; regenerate it with make_dcf.py."
+            )
+        dcf = aligned
     logging.info("Density compensation: precomputed '%s' from %s (method=%s)",
                  DCF_DATASET, os.path.basename(source), method)
     return np.ascontiguousarray(dcf.reshape(-1), dtype=np.float32)
+
+
+def _align_stored_dcf(dcf, selection, expected_shape):
+    """Put a DCF stored for the whole trajectory file through the same row and
+    sample selection the trajectory went through in preparation.
+
+    One echo of an alternating-echo stream uses every other trajectory row, and a
+    scan that stopped early uses the rows that arrived, so the prepared trajectory
+    is a subset of the file's. The stored weights of those rows are the right
+    relative weights for them: the subset's sampling density differs from the
+    whole file's by a near-constant factor (the echoes interleave uniformly), and
+    a constant only rescales the data term against `cglamda`. Returns None when
+    the stored array cannot be made to follow the selection.
+    """
+    if not selection or dcf.ndim != 2:
+        return None
+    if selection.get("swapped"):
+        dcf = dcf.T
+    rows = selection.get("rows")
+    total_rows = dcf.shape[1]
+    if rows is not None:
+        rows = np.asarray(rows, dtype=np.int64)
+        if rows.size == 0 or int(rows.max()) >= dcf.shape[1]:
+            return None
+        dcf = dcf[:, rows]
+    offset = int(selection.get("sample_offset", 0))
+    dcf = dcf[offset:offset + int(selection.get("samples", dcf.shape[0])),
+              :int(selection.get("readouts", dcf.shape[1]))]
+    if dcf.shape != tuple(int(n) for n in expected_shape):
+        return None
+    logging.info("Density compensation: stored weights aligned to the %d of %d trajectory rows "
+                 "this reconstruction uses", dcf.shape[1], total_rows)
+    return np.ascontiguousarray(dcf)
 
 
 def _looks_uniform_radial(trajectory, tol=0.05):
@@ -448,6 +522,10 @@ def reconstruct(recon):
             "about %d^3; reconstructing at %d^3 interpolates rather than resolves.",
             100 * extent / (recon.matrix_size / 2), int(round(2 * extent)), recon.matrix_size,
         )
+    if extent > 0.5 * recon.matrix_size + 1e-3:
+        logging.warning("Trajectory exceeds the matrix (|k|max %.2f > %d); samples outside "
+                        "will be dropped. Raise matrixsize to the sequence's label extent.",
+                        extent, recon.matrix_size // 2)
 
     maps = espirit_maps(recon, coord, weights)
     lamda = float(recon.config["cglamda"])
@@ -464,6 +542,56 @@ def reconstruct(recon):
 
     recon.save_debug("espirit_maps", maps)
     return np.abs(x).astype(np.float32)
+
+
+def gradient_unwarp(volume, context):
+    """Output hook: correct gradient nonlinearity in the acquisition frame.
+
+    Skips with a warning (never fails the reconstruction) when switched off or
+    when no coefficient file can be found. The file is Siemens-proprietary and
+    is not bundled; copy coeff_<coil>.grad into fire\\share (/tmp/share).
+    Identical to quickgrid's hook; the maths lives in gradwarp.py.
+    """
+    params = context["params"]
+    mode = str(params.get("gradunwarp", "off")).strip()
+    if mode.lower() in ("", "off", "false", "0"):
+        logging.info("gradunwarp: off")
+        return volume
+    coil = None
+    try:
+        coil = str(context["metadata"].acquisitionSystemInformation.systemModel)
+    except Exception:
+        pass
+    path = gradwarp.find_coefficient_file(params.get("gradcoeffile", "auto"), coil_name="IMPULSE")
+    if path is None or not os.path.exists(path):
+        logging.warning("gradunwarp: no gradient coefficient file (gradcoeffile=%r, searched %s); "
+                        "emitting the uncorrected volume",
+                        params.get("gradcoeffile"), gradwarp.COEFF_SEARCH_DIRS)
+        return volume
+    coeffs = gradwarp.read_siemens_grad(path)
+    head = context["reference_head"]
+    try:
+        position = str(context["metadata"].measurementInformation.patientPosition)
+    except Exception:
+        position = "unknown"
+    if position.upper() not in ("HFS", "PATIENTPOSITION.HFS", "UNKNOWN"):
+        logging.warning("gradunwarp: patient position %s; the LPS->coil-frame mapping is validated "
+                        "for HFS only", position)
+    packed, key = mrdrecon.to_acquisition_frame(volume, context["orientation"], context["flip_slice"])
+    n = packed.shape
+    fov = float(context["output_fov_mm"])
+    spacing = [fov / n[0], fov / n[1], fov / n[2]]
+    dirs = [np.asarray(head.slice_dir, float), np.asarray(head.phase_dir, float), np.asarray(head.read_dir, float)]
+    logging.info("gradunwarp: %s from %s (coil %s), centre %s mm, spacing %.3f mm",
+                 mode, path, coil, tuple(round(float(v), 2) for v in head.position), spacing[0])
+    corrected = gradwarp.unwarp_volume(
+        packed, coeffs, center_lps=np.asarray(head.position, float), axis_dirs_lps=dirs,
+        spacing_mm=spacing, mode="2D" if mode.upper().startswith("2D") else "3D",
+        jacobian=mode.lower() not in ("3dnojac", "nojac"))
+    return mrdrecon.from_acquisition_frame(corrected, key, context["flip_slice"])
+
+
+mrdrecon.OUTPUT_VOLUME_HOOKS.append(gradient_unwarp)
 
 
 def process(connection, config, metadata):

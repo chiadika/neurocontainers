@@ -6,18 +6,18 @@
     "version": "VERSION_WILL_BE_REPLACED_BY_SCRIPT",
     "vendor": "neurodesk",
     "information": {
-      "en": "CG-SENSE reconstruction for 3D centre-out radial with ESPIRiT coil maps."
+      "en": "CG-SENSE (ESPIRiT maps, Toeplitz normal operator) for 3D radial and cones Pulseq acquisitions."
     },
     "id": "cgsense3d",
     "regulatory_information": {
       "device_trade_name": "cgsense3d",
-      "production_identifier": "VERSION_WILL_BE_REPLACED_BY_SCRIPT",
-      "manufacturer_address": "Erlangen, Germany",
-      "made_in": "DE",
-      "manufacture_date": "2023/02/14",
+      "production_identifier": "1.0",
+      "manufacturer_address": "NeuroDesk",
+      "made_in": "AU",
+      "manufacture_date": "2026-01-01",
       "material_number": "cgsense3d_VERSION_WILL_BE_REPLACED_BY_SCRIPT",
-      "gtin": "00860000171212",
-      "udi": "(01)00860000171212(21)1.3.0",
+      "gtin": "00000000000000",
+      "udi": "(01)00000000000000(21)VERSION_WILL_BE_REPLACED_BY_SCRIPT",
       "safety_advices": "",
       "special_operating_instructions": "OpenRecon CG-SENSE reconstruction from raw k-space to magnitude image data",
       "additional_relevant_information": ""
@@ -73,19 +73,31 @@
         {
           "id": "/opt/cgsense3d/radial3d_res128_us2x_trajectory.h5",
           "name": {
-            "en": "128^3, 2x undersampled (25536 spokes, 2.6 min)"
+            "en": "radial 128^3, 2x undersampled (25536 spokes)"
           }
         },
         {
           "id": "/opt/cgsense3d/radial3d_res128_nyquist_trajectory.h5",
           "name": {
-            "en": "128^3, Nyquist (51071 spokes, 5.2 min)"
+            "en": "radial 128^3, Nyquist (51071 spokes)"
           }
         },
         {
           "id": "/opt/cgsense3d/radial3d_n6434_trajectory.h5",
           "name": {
-            "en": "32^3, original sequence (6434 spokes, 39 s)"
+            "en": "radial 32^3, original (6434 spokes)"
+          }
+        },
+        {
+          "id": "/opt/cgsense3d/cones3d_n4846_trajectory.h5",
+          "name": {
+            "en": "cones R=2 (4846 readouts, matrix 134)"
+          }
+        },
+        {
+          "id": "/opt/cgsense3d/cones3d_n9598_trajectory.h5",
+          "name": {
+            "en": "cones fully sampled (9598 readouts, matrix 134)"
           }
         },
         {
@@ -101,21 +113,27 @@
           }
         },
         {
-          "id": "/tmp/share/cones3d_n206435_trajectory.h5",
+          "id": "/opt/cgsense3d/cones3d_n206435_trajectory.h5",
           "name": {
-            "en": "share: cones 512^3 250 mm TR2 R=4 (206435 readouts, matrix 512, FOV 25.0)"
+            "en": "cones 512^3 250 mm TR2 R=4 (206435 readouts, matrix 512, FOV 25.0)"
           }
         },
         {
-          "id": "/tmp/share/cones3d_n412489_trajectory.h5",
+          "id": "/opt/cgsense3d/cones3d_n412489_trajectory.h5",
           "name": {
-            "en": "share: cones 512^3 250 mm TR2 R=2 (412489 readouts, matrix 512, FOV 25.0)"
+            "en": "cones 512^3 250 mm TR2 R=2 (412489 readouts, matrix 512, FOV 25.0)"
+          }
+        },
+        {
+          "id": "/opt/cgsense3d/cones3d_n34506_ir32_trajectory.h5",
+          "name": {
+            "en": "cones 256^3 IR-prepared, random order (34506 readouts, matrix 278, FOV 25.0) - select by name, not auto"
           }
         }
       ],
       "default": "auto",
       "information": {
-        "en": "Auto matches the acquired (samples, readouts) against the bundled trajectories, which have distinct shapes. Choosing the wrong one by hand does not degrade the image, it produces a wrong one: phyllotaxis directions depend on the total spoke count, so 92% of spokes differ by more than 10 degrees between the bundled 128^3 sets. An explicit choice that disagrees with the data is now rejected. Also searches fire\\share (/tmp/share) for *_trajectory.h5. Cones trajectories carry a precomputed DCF; matrixsize must equal the label extent named here."
+        "en": "Auto matches the acquired (samples, readouts) against the bundled trajectories and any *_trajectory.h5 in fire\\share, on the whole stream when echosplit is set, and refuses a mismatch: phyllotaxis directions depend on the spoke count, so a wrong trajectory gives a wrong image, not a degraded one. Cones trajectories carry a precomputed DCF; matrixsize must equal the label extent named here."
       }
     },
     {
@@ -128,7 +146,7 @@
       "maximum": 1024,
       "default": 128,
       "information": {
-        "en": "Isotropic output matrix. 128 for the radial sequences (the 32^3 trajectory resolves about 32; larger values interpolate), 266/278 for the 256^3 cones, 512 for the 512^3 cones. Must equal the sequence's LIN/PAR label extent."
+        "en": "Isotropic output matrix. 128 for the radial sequences (the 32^3 trajectory resolves about 32; larger values interpolate), 134 for the 220 mm cones, 266/278 for the 256^3 cones, 512 for the 512^3 cones. Must equal the sequence's LIN/PAR label extent."
       }
     },
     {
@@ -176,7 +194,7 @@
       ],
       "default": "auto",
       "information": {
-        "en": "Auto uses a precomputed 'dcf' dataset in the trajectory file if present, falls back to analytic |k|^2 for uniformly-sampled radial, and to Pipe-Menon otherwise. Pipe-Menon at reconstruction time costs minutes: for cones, spirals or variable-density trajectories, precompute with make_dcf.py instead."
+        "en": "Weights W of the data term and the starting (gridding) image. Auto uses the trajectory file's 'dcf' dataset when present (cut to the rows an echo or a short acquisition uses), analytic |k|^2 for uniformly-sampled radial, Pipe-Menon otherwise (minutes)."
       }
     },
     {
@@ -213,40 +231,7 @@
       "maximum": 128,
       "default": 32,
       "information": {
-        "en": "Grid size for ESPIRiT calibration. Maps are interpolated up to the output matrix."
-      }
-    },
-    {
-      "id": "espiritthresh",
-      "label": {
-        "en": "ESPIRiT threshold"
-      },
-      "type": "string",
-      "default": "0.02",
-      "information": {
-        "en": "Singular value threshold for the ESPIRiT calibration matrix."
-      }
-    },
-    {
-      "id": "espiritcrop",
-      "label": {
-        "en": "ESPIRiT crop"
-      },
-      "type": "string",
-      "default": "0.8",
-      "information": {
-        "en": "Eigenvalue cutoff defining the sensitivity support mask."
-      }
-    },
-    {
-      "id": "coilvarianceretention",
-      "label": {
-        "en": "Coil variance retention"
-      },
-      "type": "string",
-      "default": "0.95",
-      "information": {
-        "en": "Fraction of channel covariance the PCA virtual coils must retain."
+        "en": "Grid size for ESPIRiT calibration. Maps are interpolated up to the output matrix. espiritthresh (0.02) and espiritcrop (0.8) are set from the JSON config only."
       }
     },
     {
@@ -259,7 +244,33 @@
       "maximum": 64,
       "default": 0,
       "information": {
-        "en": "Reconstruct at most this many physical channels. 0 uses all of them."
+        "en": "0 uses every receive channel (then PCA coil compression to 95% variance). A positive value keeps only the first N physical channels."
+      }
+    },
+    {
+      "id": "maxworkers",
+      "label": {
+        "en": "Worker threads"
+      },
+      "type": "int",
+      "minimum": 1,
+      "maximum": 32,
+      "default": 8,
+      "information": {
+        "en": "Threads for the per-coil Toeplitz convolutions in every CG iteration. Capped by the number of virtual coils; the result does not depend on it."
+      }
+    },
+    {
+      "id": "echosplit",
+      "label": {
+        "en": "Echoes per TR"
+      },
+      "type": "int",
+      "minimum": 1,
+      "maximum": 4,
+      "default": 1,
+      "information": {
+        "en": "1 for single-echo data. 2 for the two-echo cones files: acquisitions are split by their position in the TR (or by the contrast counter) and each echo is reconstructed into its own series (_echo1, _echo2). Acquisitions per trajectory row (1 for alternating echoes, 2 for rewind-and-repeat) are inferred from the counts."
       }
     },
     {
@@ -318,15 +329,63 @@
           }
         },
         {
+          "id": "xyz",
+          "name": {
+            "en": "xyz"
+          }
+        },
+        {
+          "id": "xyz_fx",
+          "name": {
+            "en": "xyz_fx"
+          }
+        },
+        {
+          "id": "xyz_fy",
+          "name": {
+            "en": "xyz_fy"
+          }
+        },
+        {
+          "id": "xyz_fxy",
+          "name": {
+            "en": "xyz_fxy"
+          }
+        },
+        {
+          "id": "xzy",
+          "name": {
+            "en": "xzy"
+          }
+        },
+        {
+          "id": "xzy_fx",
+          "name": {
+            "en": "xzy_fx"
+          }
+        },
+        {
+          "id": "xzy_fy",
+          "name": {
+            "en": "xzy_fy"
+          }
+        },
+        {
+          "id": "xzy_fxy",
+          "name": {
+            "en": "xzy_fxy"
+          }
+        },
+        {
           "id": "debug",
           "name": {
             "en": "debug"
           }
         }
       ],
-      "default": "zyx",
+      "default": "xyz",
       "information": {
-        "en": "Mapping from trajectory components to acquisition axes. 'debug' emits every mapping as a separate series."
+        "en": "Trajectory components placed on (slices, rows, columns); _fx/_fy reverse columns/rows. 'xyz' is right for the Terra.X Pulseq interpreter (x gradient runs F->H, z runs L->R). 'debug' emits every mapping as a separate series."
       }
     },
     {
@@ -338,6 +397,43 @@
       "default": false,
       "information": {
         "en": "Reverse the through-plane order before the display-frame canonicalisation."
+      }
+    },
+    {
+      "id": "gradunwarp",
+      "label": {
+        "en": "Distortion correction"
+      },
+      "type": "choice",
+      "values": [
+        {
+          "id": "off",
+          "name": {
+            "en": "Off"
+          }
+        },
+        {
+          "id": "3D",
+          "name": {
+            "en": "3D with intensity correction"
+          }
+        },
+        {
+          "id": "3Dnojac",
+          "name": {
+            "en": "3D, geometry only"
+          }
+        },
+        {
+          "id": "2D",
+          "name": {
+            "en": "2D in-plane (like DistorCor2D)"
+          }
+        }
+      ],
+      "default": "3D",
+      "information": {
+        "en": "Gradient-nonlinearity correction applied in the recon (ICE's own functor cannot reach injected images). Needs the Siemens coeff_<coil>.grad in fire\\share (gradcoeffile 'auto', JSON only); skipped with a warning when it is missing."
       }
     }
   ]

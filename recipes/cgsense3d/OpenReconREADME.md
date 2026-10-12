@@ -88,3 +88,38 @@ python /opt/code/python-ismrmrd-server/run_local.py raw.h5 -o r32.nii.gz -m cgse
 ```
 
 `run_local.py` uses the same `prepare()` → `reconstruct()` path as the server.
+
+## 1.2.0: parity with quickgrid 1.2.6
+
+The scanner-facing layer is shared with quickgrid (`mrdrecon.py`), so
+everything quickgrid gained between 1.1.1 and 1.2.6 now applies here too:
+
+- **Trajectories.** The same bundled set as quickgrid (220 mm cones R=2/R=1,
+  256^3 and 512^3 / 250 mm cones, the IR-prepared random-order set selectable
+  by name), fetched from the `quickgrid-trajectories-v1` release at build time.
+  `trajectoryfile: auto` matches by (samples, readouts) and also searches
+  `fire\share` (/tmp/share) for `*_trajectory.h5`.
+- **Multi-echo streams.** `echosplit` 2 reconstructs the two-echo cones files
+  into `_echo1` / `_echo2` series; the trajectory is chosen and checked on the
+  whole stream (an integer number of ADCs per trajectory row), and the stored
+  `dcf` is cut to the rows each echo uses. For CG-SENSE the DCF is the weight
+  `W` of the data term and the starting gridding image; a constant factor from
+  the row subset only rescales the data term against `cglamda`.
+- **Orientation.** Full-permutation keys (`xyz`, `xzy`, `zxy`, `zyx` with
+  `_fx`/`_fy`/`_fxy`), default `xyz`, which is right for the Terra.X Pulseq
+  interpreter.
+- **Distortion correction.** `gradunwarp` (3D / 3Dnojac / 2D / off) applied as
+  an output hook from the Siemens coefficient file in `fire\share`; skipped
+  with a warning when the file is missing. The file is proprietary and never
+  bundled.
+- **Threads.** `maxworkers` sets the threads for the per-coil Toeplitz
+  convolutions (the CG inner loop); the result does not depend on it.
+- The OpenRecon label holds 14 parameters; `espiritthresh`, `espiritcrop`,
+  `coilvarianceretention`, `usetoeplitz` and `gradcoeffile` are set from the
+  JSON config only.
+
+Why iterate at all: on the 128^3 / R=2-per-echo IR-prepared cones data the
+gridding image shows curved aliasing texture from the azimuthal undersampling,
+amplified by the random inversion-train weighting. CG-SENSE unfolds the
+aliasing with the coil sensitivities and fits all readouts jointly, which is
+what density compensation cannot do.

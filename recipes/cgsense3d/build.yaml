@@ -1,5 +1,5 @@
 name: cgsense3d
-version: 1.1.6
+version: 1.2.0
 
 copyright:
   - license: MIT
@@ -11,6 +11,8 @@ architectures:
 files:
   - name: cgsense3d.py
     filename: cgsense3d.py
+  - name: gradwarp.py
+    filename: gradwarp.py
   - name: mrdrecon.py
     filename: mrdrecon.py
   - name: run_local.py
@@ -26,15 +28,25 @@ files:
   - name: OpenReconREADME.md
     filename: OpenReconREADME.md
   - name: radial3d_trajectory
-    filename: radial3d_n6434_trajectory.h5
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/radial3d_n6434_trajectory.h5
   - name: radial3d_res128_nyquist
-    filename: radial3d_res128_nyquist_trajectory.h5
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/radial3d_res128_nyquist_trajectory.h5
   - name: radial3d_res128_us2x
-    filename: radial3d_res128_us2x_trajectory.h5
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/radial3d_res128_us2x_trajectory.h5
   - name: cones3d_n68785
-    filename: cones3d_n68785_trajectory.h5
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/cones3d_n68785_trajectory.h5
   - name: cones3d_n34506
-    filename: cones3d_n34506_trajectory.h5
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/cones3d_n34506_trajectory.h5
+  - name: cones3d_n4846
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/cones3d_n4846_trajectory.h5
+  - name: cones3d_n9598
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/cones3d_n9598_trajectory.h5
+  - name: cones3d_n206435
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/cones3d_n206435_trajectory.h5
+  - name: cones3d_n412489
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/cones3d_n412489_trajectory.h5
+  - name: cones3d_n34506_ir32
+    url: https://github.com/chiadika/neurocontainers/releases/download/quickgrid-trajectories-v1/cones3d_n34506_ir32_trajectory.h5
 
 build:
   kind: neurodocker
@@ -59,6 +71,7 @@ build:
     - workdir: /opt/cgsense3d
     - run:
         - cp {{ get_file("cgsense3d.py") }} /opt/code/python-ismrmrd-server/cgsense3d.py
+        - cp {{ get_file("gradwarp.py") }} /opt/code/python-ismrmrd-server/gradwarp.py
         - cp {{ get_file("mrdrecon.py") }} /opt/code/python-ismrmrd-server/mrdrecon.py
         - cp {{ get_file("run_local.py") }} /opt/code/python-ismrmrd-server/run_local.py
         - cp {{ get_file("twix2mrd.py") }} /opt/code/python-ismrmrd-server/twix2mrd.py
@@ -72,6 +85,11 @@ build:
         - cp {{ get_file("radial3d_res128_us2x") }} /opt/cgsense3d/radial3d_res128_us2x_trajectory.h5
         - cp {{ get_file("cones3d_n68785") }} /opt/cgsense3d/cones3d_n68785_trajectory.h5
         - cp {{ get_file("cones3d_n34506") }} /opt/cgsense3d/cones3d_n34506_trajectory.h5
+        - cp {{ get_file("cones3d_n4846") }} /opt/cgsense3d/cones3d_n4846_trajectory.h5
+        - cp {{ get_file("cones3d_n9598") }} /opt/cgsense3d/cones3d_n9598_trajectory.h5
+        - cp {{ get_file("cones3d_n206435") }} /opt/cgsense3d/cones3d_n206435_trajectory.h5
+        - cp {{ get_file("cones3d_n412489") }} /opt/cgsense3d/cones3d_n412489_trajectory.h5
+        - cp {{ get_file("cones3d_n34506_ir32") }} /opt/cgsense3d/cones3d_n34506_ir32_trajectory.h5
 
 deploy:
   bins:
@@ -85,12 +103,22 @@ icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAFZkl
 readme: |-
   ----------------------------------
   ## cgsense3d/{{ context.version }} ##
-  CG-SENSE reconstruction for 3D centre-out radial acquisitions, with ESPIRiT
-  coil sensitivity estimation and a Toeplitz-accelerated normal operator.
+  CG-SENSE reconstruction for 3D radial and cones Pulseq acquisitions, with
+  ESPIRiT coil sensitivity estimation and a Toeplitz-accelerated normal
+  operator. The iterative counterpart of quickgrid: same scanner handoff,
+  trajectories, echo splitting, orientation and distortion correction, but the
+  image is the regularised least-squares solution instead of a gridding image,
+  so undersampling aliasing is unfolded with the coil sensitivities.
 
-  The bundled trajectory was integrated from the Pulseq gradient waveforms of
-  `radial3d_n6434_s117_c0.seq`: 6434 centre-out spokes, 32 samples each,
-  stored in cycles/cm as dataset `k` with shape (32, 6434, 3).
+  Since 1.2.0 it carries everything quickgrid gained up to 1.2.6: the full
+  bundled trajectory set (three 3D radial, six 3D cones incl. the 512^3 and the
+  IR-prepared random-order set, fetched from the quickgrid-trajectories-v1
+  release), `trajectoryfile: auto` matched by shape and on the whole stream
+  when `echosplit` splits a multi-echo acquisition, a stored DCF cut to the
+  rows an echo or a short scan uses, the full-permutation `orientation` keys
+  with `xyz` as default for the Terra.X Pulseq interpreter, and in-recon
+  gradient-nonlinearity correction (`gradunwarp`) from the scanner's Siemens
+  coefficient file read from `fire\share` (never bundled).
 
   Reconstruct offline without a scanner:
   ```bash

@@ -118,11 +118,12 @@ everything quickgrid gained between 1.1.1 and 1.2.6 now applies here too:
   `coilvarianceretention`, `usetoeplitz` and `gradcoeffile` are set from the
   JSON config only.
 
-Measured on the 128^3 / R=2-per-echo IR-prepared cones pair (echo 1, 5676
-readouts, 12 virtual coils, matrix 145, laptop CPU): relative to the gridding
-image, 6 CG iterations cut the aliasing outside the head from 0.20 to 0.044 of
-the brain mean (4.5x) and the fine noise inside the brain from 0.043 to 0.032,
-while the 4-7 mm swirl band inside the brain stays at 0.03. That texture is
+Measured on a phantom scan of the 128^3 / R=2-per-echo IR-prepared cones
+pair (echo 1, 5676 readouts, 12 virtual coils, matrix 145, laptop CPU):
+relative to the gridding image, 6 CG iterations cut the aliasing outside the
+object from 0.20 to 0.044 of the object mean (4.5x) and the fine noise inside
+it from 0.043 to 0.032, while the 4-7 mm swirl band inside the object stays at
+0.03. That texture is
 undersampling of a contrast that changes along the inversion train, which no
 static model fits; 12 iterations only amplify it (0.041) and the noise
 (0.061), and lamda 0.03 at 12 iterations sits in between. For this family,
